@@ -1,0 +1,30 @@
+[project]
+name = "deep-generative-models-of-texts-and-images"
+version = "0.1.0"
+description = "Reproducible IWAE reconstruction and IWAE-DReG improvement on MNIST"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "cyclopts>=4.21.1",
+    "lightning>=2.6.5",
+    "torch>=2.13.0",
+    "torchmetrics>=1.9.0",
+    "torchvision>=0.28.0",
+]
+
+[project.scripts]
+iwae = "iwae_reproduction.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/iwae_reproduction"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
