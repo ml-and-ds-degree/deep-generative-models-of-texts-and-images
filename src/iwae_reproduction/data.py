@@ -12,7 +12,11 @@ from torchvision.datasets import MNIST
 
 
 class BinarizedImages(Dataset[Tensor]):
-    """MNIST probabilities sampled as Bernoulli observations."""
+    """MNIST probabilities sampled as Bernoulli observations.
+
+    ``seed=None`` implements the paper's dynamic training binarization. A seed
+    fixes one draw per example for paired validation/test comparisons.
+    """
 
     def __init__(self, images: Tensor, *, seed: int | None = None):
         self.probabilities = images.to(torch.float32).div_(255).flatten(1)
@@ -49,7 +53,13 @@ def seeded_dataloader(
 
 
 class MNISTDataModule(L.LightningDataModule):
-    """Paper split with dynamic train and reproducibility-fixed evaluation draws."""
+    """Paper-code split with dynamic train and fixed paired-evaluation draws.
+
+    The paper describes the standard 60,000/10,000 train/test split; its
+    released code reserves the final 400 training examples for validation.
+    Fixed validation/test draws are this project's documented reproducibility
+    addition, not a claim about the paper's evaluation protocol.
+    """
 
     def __init__(
         self,

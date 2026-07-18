@@ -1,4 +1,10 @@
-"""IWAE bounds and the doubly-reparameterized encoder surrogate."""
+"""IWAE bounds and the doubly-reparameterized encoder surrogate.
+
+PyTorch does not provide either research objective. They remain explicit so
+their gradients can be checked against Burda et al. and Tucker et al. DReG
+changes the encoder gradient estimator only; the generative objective and
+decoder gradient remain the original IWAE ones.
+"""
 
 from __future__ import annotations
 
@@ -36,7 +42,8 @@ def importance_terms(
     zeros = torch.zeros((), device=z.device, dtype=z.dtype)
     log_pz = normal_log_prob(z, zeros, zeros)
     log_qz = normal_log_prob(z, mean[:, None, :], log_std[:, None, :])
-    # Stop the explicit score-function path through q while retaining dz/dphi.
+    # DReG needs this separate path: stop the explicit score-function path
+    # through q while retaining the reparameterized dz/dphi path.
     log_qz_pathwise = normal_log_prob(z, mean.detach()[:, None, :], log_std.detach()[:, None, :])
     return ImportanceTerms(
         log_weights=log_px_given_z + log_pz - log_qz,

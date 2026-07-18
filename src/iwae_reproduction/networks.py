@@ -9,12 +9,14 @@ from torch import Tensor, nn
 
 
 def _initialize_linear(layer: nn.Linear) -> None:
+    # PyTorch Linear defaults to Kaiming-uniform-like initialization. Explicit
+    # Xavier weights and zero biases preserve the IWAE implementation instead.
     nn.init.xavier_uniform_(layer.weight)
     nn.init.zeros_(layer.bias)
 
 
 class GaussianEncoder(nn.Module):
-    """784-200-200 encoder with a diagonal 50-dimensional Gaussian output."""
+    """Paper-faithful 784-200-200 diagonal-Gaussian encoder."""
 
     def __init__(self, input_dim: int = 784, hidden_dim: int = 200, latent_dim: int = 50):
         super().__init__()
@@ -39,7 +41,7 @@ class GaussianEncoder(nn.Module):
 
 
 class BernoulliDecoder(nn.Module):
-    """50-200-200 decoder returning Bernoulli logits over 784 pixels."""
+    """Paper-faithful 50-200-200 decoder returning 784 Bernoulli logits."""
 
     def __init__(self, latent_dim: int = 50, hidden_dim: int = 200, output_dim: int = 784):
         super().__init__()
@@ -63,7 +65,7 @@ class BernoulliDecoder(nn.Module):
 
     @torch.no_grad()
     def initialize_output_bias(self, pixel_mean: Tensor) -> None:
-        """Initialize p(x|z)'s bias to the empirical pixel log odds."""
+        """Initialize p(x|z)'s bias to the paper's empirical pixel log odds."""
         probabilities = pixel_mean.flatten().clamp(1e-3, 1 - 1e-3)
         self.output_layer.bias.copy_(torch.logit(probabilities))
 

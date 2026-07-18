@@ -1,4 +1,13 @@
-"""Cyclopts command-line interface for every reproducible experiment."""
+"""Cyclopts command-line interface for every reproducible experiment.
+
+For a controlled IWAE/DReG comparison, invoke ``train`` with identical options
+and seeds, evaluate checkpoints with the same 5,000-particle configuration,
+and reuse one classifier checkpoint and KID subset seed. Never compare models
+trained for different budgets. The primary paper metric is test NLL (lower is
+better); active units are descriptive and classifier-feature KID measures a
+different property. The selected paper references are 84.78 nats and 25 active
+units, not pass/fail thresholds.
+"""
 
 from __future__ import annotations
 
@@ -150,7 +159,7 @@ def evaluate(
     accelerator: Accelerator = "auto",
     limit_test_batches: int | None = None,
 ) -> None:
-    """Report test NLL estimated with L_K and the number of active units."""
+    """Report primary test NLL (L_K) and descriptive active-unit count."""
     L.seed_everything(seed, workers=True)
     data = MNISTDataModule(data_dir, batch_size, num_workers, seed)
     model = IWAELitModule.load_from_checkpoint(
@@ -244,7 +253,12 @@ def kid(
     seed: int = 236,
     accelerator: Accelerator = "auto",
 ) -> None:
-    """Compute MNIST-classifier-feature KID for generated versus test images."""
+    """Compute course-specific MNIST-feature KID; lower is better.
+
+    Compare values only when both models share the classifier checkpoint,
+    deterministic test data, count, subset size/count, and seed. TorchMetrics
+    returns the subset mean and subset standard deviation.
+    """
     L.seed_everything(seed, workers=True)
     fabric = _fabric(accelerator)
     model = fabric.setup_module(IWAELitModule.load_from_checkpoint(checkpoint).eval())
@@ -286,7 +300,7 @@ def benchmark(
     seed: int = 236,
     accelerator: Accelerator = "auto",
 ) -> None:
-    """Measure a representative forward/backward step on the selected device."""
+    """Measure timing only; this does not modify the scientific experiment."""
     if particles < 1 or batch_size < 1 or min_run_time <= 0:
         raise ValueError("particles, batch_size, and min_run_time must be positive")
     L.seed_everything(seed, workers=True)

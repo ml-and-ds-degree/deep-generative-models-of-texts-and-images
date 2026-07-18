@@ -1,4 +1,9 @@
-"""Fixed MNIST classifier used solely as the KID feature extractor."""
+"""Fixed MNIST classifier used solely as the course KID feature extractor.
+
+The original IWAE paper did not report KID. These features are not ImageNet
+Inception features, so values are comparable only when classifier checkpoint,
+real examples, sample count, subset configuration, and seed are shared.
+"""
 
 from __future__ import annotations
 

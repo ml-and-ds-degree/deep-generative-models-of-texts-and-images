@@ -23,7 +23,7 @@ from iwae_reproduction.objectives import (
 
 
 class IWAELitModule(L.LightningModule):
-    """One-layer IWAE with either the original or DReG encoder estimator."""
+    """One-stochastic-layer IWAE with the original or DReG encoder estimator."""
 
     def __init__(
         self,
@@ -114,7 +114,12 @@ class IWAELitModule(L.LightningModule):
         )
 
     def estimate_log_likelihood(self, x: Tensor, particles: int, chunk_size: int) -> Tensor:
-        """Estimate per-example log p(x), retaining at most ``chunk_size`` particles."""
+        """Estimate log p(x), retaining at most ``chunk_size`` particles.
+
+        Chunking is an exact computational reformulation of the single
+        L_particles log-sum-exp estimator; it bounds memory without averaging
+        independent chunk estimates. The paper comparison uses L_5000.
+        """
         if particles < 1 or chunk_size < 1:
             raise ValueError("particles and chunk_size must both be positive")
         mean, log_std = self.encoder(x)
@@ -185,6 +190,9 @@ class IWAELitModule(L.LightningModule):
             "betas": (0.9, 0.999),
             "eps": 1e-4,
         }
+        # Separate optimizers let DReG apply different encoder and decoder
+        # gradients. Adam state is parameter-local, and both optimizers step
+        # exactly once per batch, so this does not change the IWAE control.
         optimizers = [
             torch.optim.Adam(self.encoder.parameters(), **adam_arguments),
             torch.optim.Adam(self.decoder.parameters(), **adam_arguments),

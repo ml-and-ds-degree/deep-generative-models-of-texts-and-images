@@ -8,7 +8,12 @@ from torchmetrics import Metric
 
 
 class ActiveUnits(Metric):
-    """Count latent means whose dataset variance exceeds the paper threshold."""
+    """Count dimensions with Var_x(E_q[z|x]) > 0.01, as in the IWAE paper.
+
+    This is a descriptive representation diagnostic, not evidence that a
+    coordinate is disentangled. The selected K=50 paper result is 25 of 50
+    active units; it is a reference value rather than a pass/fail threshold.
+    """
 
     full_state_update = False
 
