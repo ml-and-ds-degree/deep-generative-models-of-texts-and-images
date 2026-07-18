@@ -1,0 +1,22 @@
+{
+  "name": "LaTeX report",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "mounts": [
+    "source=${localWorkspaceFolderBasename}-venv,target=${containerWorkspaceFolder}/.venv,type=volume"
+  ],
+  "postCreateCommand": "uv sync --locked",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "James-Yu.latex-workshop",
+        "ms-python.python",
+        "charliermarsh.ruff"
+      ],
+      "settings": {
+        "latex-workshop.latex.outDir": "%DIR%/build"
+      }
+    }
+  }
+}

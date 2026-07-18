@@ -34,6 +34,39 @@ uv run iwae --help
 
 MNIST is downloaded automatically into `data/` on first use.
 
+## Dev Container and MPS workflow
+
+> [!WARNING]
+> A Dev Container runs Linux, so it cannot access macOS Metal Performance
+> Shaders (MPS). Use `--accelerator cpu` inside the container, or run training
+> natively on macOS when MPS acceleration is required.
+
+The Dev Container provides the locked Python environment plus `latexmk` and
+`pdftoppm` for reproducible report work. Its virtual environment is separate
+from the local `.venv`, but the repository itself is shared, so checkpoints,
+metrics, figures, and report sources remain available in both environments.
+
+For the usual hybrid workflow:
+
+1. On the macOS host, train with MPS and write artifacts into the shared
+   repository:
+
+   ```bash
+   uv sync
+   uv run iwae train iwae --accelerator mps --output-dir outputs/mps
+   ```
+
+2. Reopen the repository with **Dev Containers: Reopen in Container**. Build
+   the report with LaTeX Workshop, or run:
+
+   ```bash
+   cd report
+   latexmk -pdf -outdir=build main.tex
+   ```
+
+The container is also suitable for CPU-only tests, for example
+`uv run python -m unittest discover -s tests -v`.
+
 ## Fast local verification
 
 These commands exercise both estimators without claiming paper-level results:
@@ -87,13 +120,10 @@ uv run iwae train-classifier --accelerator gpu
 uv run iwae kid MODEL.ckpt CLASSIFIER.ckpt --accelerator gpu
 ```
 
-The complete controlled comparison and report table are in
-[`docs/experiment-protocol.md`](docs/experiment-protocol.md). The measured M1
-budget and Colab guidance are in
-[`docs/compute-feasibility.md`](docs/compute-feasibility.md). The distinction
-between faithful paper choices, engineering modernizations, evaluation
-additions, and the actual DReG improvement is documented in
-[`docs/paper-fidelity.md`](docs/paper-fidelity.md).
+The measured M1 budget and Colab guidance are in
+[`docs/compute-feasibility.md`](docs/compute-feasibility.md). Experimental
+invariants and paper-fidelity rationale are kept as comments beside the
+relevant data, model, objective, metric, and CLI implementation.
 
 ## Reproducibility
 
