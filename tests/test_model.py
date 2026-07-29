@@ -35,6 +35,31 @@ class ArchitectureTests(unittest.TestCase):
         log_weights = torch.tensor([[1.0], [3.0]])
         torch.testing.assert_close(iwae_loss(log_weights), torch.tensor(-2.0))
 
+    def test_progressive_particle_schedule_uses_epoch_boundaries(self) -> None:
+        model = IWAELitModule(
+            train_particles=50,
+            training_particle_counts=(5, 10, 50),
+            training_particle_boundaries=(3, 7),
+        )
+        observed = [model.training_particles_for_epoch(epoch) for epoch in (0, 2, 3, 6, 7)]
+        self.assertEqual(observed, [5, 5, 10, 10, 50])
+
+    def test_progressive_particle_schedule_requires_final_count(self) -> None:
+        with self.assertRaises(ValueError):
+            IWAELitModule(
+                train_particles=50,
+                training_particle_counts=(5, 10),
+                training_particle_boundaries=(3,),
+            )
+
+    def test_progressive_particle_schedule_cannot_decrease(self) -> None:
+        with self.assertRaises(ValueError):
+            IWAELitModule(
+                train_particles=50,
+                training_particle_counts=(10, 5, 50),
+                training_particle_boundaries=(3, 7),
+            )
+
 
 class LightningSmokeTests(unittest.TestCase):
     def test_both_estimators_complete_a_training_step(self) -> None:

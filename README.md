@@ -5,6 +5,14 @@ Autoencoder (IWAE) from Burda, Grosse, and Salakhutdinov (2015), then changes
 only its encoder gradient estimator to the doubly reparameterized gradient
 (DReG) from Tucker et al. (2018).
 
+It also includes an explicitly non-reproduction `train-fast` profile that
+uses progressive particle counts. On the completed seed-236 run it reduced
+training from approximately 71.5 to 14.0 minutes and improved test
+`-L_5000` from 87.480 to 86.733. Under the shared 10,000-sample KID protocol,
+it also improved KID from `206.80 ± 26.91` to `178.08 ± 21.76` (lower is
+better). Its rationale, rejected alternatives, and multi-seed quality gate are in
+[`docs/training-acceleration.md`](docs/training-acceleration.md).
+
 The scope is sized for development on an M1 Mac with 16 GB unified memory and
 final training on a Colab GPU. The paper's complete 3,280-pass schedule is
 computationally long but memory-safe; short runs are available for smoke tests.
@@ -75,6 +83,7 @@ These commands exercise both estimators without claiming paper-level results:
 uv run python -m unittest discover -s tests -v
 uv run iwae train iwae --fast-dev-run --accelerator mps
 uv run iwae train dreg --fast-dev-run --accelerator mps
+uv run iwae train-fast --fast-dev-run --accelerator mps
 ```
 
 Use `--accelerator cpu` if MPS is unavailable. Benchmark the actual machine
@@ -85,6 +94,16 @@ deliberately truncated experiments.
 ```bash
 uv run iwae benchmark --accelerator mps --particles 50
 ```
+
+Run the accelerated candidate separately from the controlled reproduction:
+
+```bash
+uv run iwae train-fast --accelerator mps --output-dir outputs
+```
+
+The default candidate uses DReG with K=5, then K=10, then K=50; cosine learning
+rate decay; batch size 100; and K=50 validation throughout. Artifacts are kept
+under `outputs/fast-dreg/` so they cannot overwrite the fixed-K DReG run.
 
 ## Full controlled runs
 

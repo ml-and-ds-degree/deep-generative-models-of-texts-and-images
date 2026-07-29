@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+from bisect import bisect_right
+
 import lightning as L
 import torch
 from torch import Tensor
-from torch.optim.lr_scheduler import MultiStepLR
+from torch.optim.lr_scheduler import CosineAnnealingLR, LRScheduler, MultiStepLR
 from torchmetrics.aggregation import MeanMetric
 
-from iwae_reproduction.config import PAPER_EPOCH_BOUNDARIES, PAPER_LR_DECAY, Objective
+from iwae_reproduction.config import (
+    PAPER_EPOCH_BOUNDARIES,
+    PAPER_LR_DECAY,
+    LearningRateSchedule,
+    Objective,
+)
 from iwae_reproduction.metrics import ActiveUnits
 from iwae_reproduction.networks import (
     BernoulliDecoder,
@@ -37,15 +44,66 @@ class IWAELitModule(L.LightningModule):
         validation_particles: int = 50,
         test_particles: int = 5_000,
         evaluation_chunk_size: int = 100,
+        training_particle_counts: tuple[int, ...] | None = None,
+        training_particle_boundaries: tuple[int, ...] = (),
+        learning_rate_schedule: str = "paper",
+        schedule_epochs: int | None = None,
+        minimum_learning_rate: float = 1e-4,
     ):
         super().__init__()
         self.save_hyperparameters()
         self.automatic_optimization = False
         self.objective = Objective(objective)
+        self.learning_rate_schedule = LearningRateSchedule(learning_rate_schedule)
+        self.training_particle_counts = (
+            (train_particles,)
+            if training_particle_counts is None
+            else tuple(training_particle_counts)
+        )
+        self.training_particle_boundaries = tuple(training_particle_boundaries)
+        self._validate_training_configuration()
         self.encoder = GaussianEncoder(input_dim, hidden_dim, latent_dim)
         self.decoder = BernoulliDecoder(latent_dim, hidden_dim, input_dim)
         self.test_nll = MeanMetric()
         self.test_active_units = ActiveUnits(latent_dim)
+
+    def _validate_training_configuration(self) -> None:
+        if self.hparams.train_particles < 1:
+            raise ValueError("train_particles must be positive")
+        if not self.training_particle_counts or any(
+            particles < 1 for particles in self.training_particle_counts
+        ):
+            raise ValueError("training particle counts must all be positive")
+        if any(
+            left > right
+            for left, right in zip(
+                self.training_particle_counts,
+                self.training_particle_counts[1:],
+                strict=False,
+            )
+        ):
+            raise ValueError("training particle counts must be non-decreasing")
+        if len(self.training_particle_boundaries) != len(self.training_particle_counts) - 1:
+            raise ValueError("particle boundaries must contain one fewer item than counts")
+        if any(boundary < 1 for boundary in self.training_particle_boundaries):
+            raise ValueError("particle boundaries must be positive epochs")
+        ordered_boundaries = tuple(sorted(set(self.training_particle_boundaries)))
+        if ordered_boundaries != self.training_particle_boundaries:
+            raise ValueError("particle boundaries must be unique and strictly increasing")
+        if self.training_particle_counts[-1] != self.hparams.train_particles:
+            raise ValueError("the final scheduled particle count must equal train_particles")
+        if self.learning_rate_schedule is LearningRateSchedule.COSINE:
+            if self.hparams.schedule_epochs is None or self.hparams.schedule_epochs < 1:
+                raise ValueError("cosine scheduling requires positive schedule_epochs")
+            if not 0 <= self.hparams.minimum_learning_rate < self.hparams.learning_rate:
+                raise ValueError("minimum_learning_rate must be in [0, learning_rate)")
+
+    def training_particles_for_epoch(self, epoch: int) -> int:
+        """Return the reproducible particle budget for a zero-based epoch."""
+        if epoch < 0:
+            raise ValueError("epoch must be non-negative")
+        stage = bisect_right(self.training_particle_boundaries, epoch)
+        return self.training_particle_counts[stage]
 
     @torch.no_grad()
     def initialize_decoder_bias(self, pixel_mean: Tensor) -> None:
@@ -64,7 +122,8 @@ class IWAELitModule(L.LightningModule):
         encoder_optimizer.zero_grad()
         decoder_optimizer.zero_grad()
 
-        log_weights, pathwise_log_weights = self._draw_terms(batch, self.hparams.train_particles)
+        particles = self.training_particles_for_epoch(self.current_epoch)
+        log_weights, pathwise_log_weights = self._draw_terms(batch, particles)
         bound_loss = iwae_loss(log_weights)
         if self.objective is Objective.IWAE:
             self.manual_backward(bound_loss)
@@ -96,6 +155,13 @@ class IWAELitModule(L.LightningModule):
             "train/nll_bound",
             bound_loss,
             prog_bar=True,
+            on_step=False,
+            on_epoch=True,
+            batch_size=batch.shape[0],
+        )
+        self.log(
+            "train/particles",
+            float(particles),
             on_step=False,
             on_epoch=True,
             batch_size=batch.shape[0],
@@ -184,7 +250,7 @@ class IWAELitModule(L.LightningModule):
 
     def configure_optimizers(
         self,
-    ) -> tuple[list[torch.optim.Adam], list[MultiStepLR]]:
+    ) -> tuple[list[torch.optim.Adam], list[LRScheduler]]:
         adam_arguments = {
             "lr": self.hparams.learning_rate,
             "betas": (0.9, 0.999),
@@ -197,14 +263,24 @@ class IWAELitModule(L.LightningModule):
             torch.optim.Adam(self.encoder.parameters(), **adam_arguments),
             torch.optim.Adam(self.decoder.parameters(), **adam_arguments),
         ]
-        schedulers = [
-            # Framework-native expression of the paper schedule; this is an
-            # engineering modernization, not an experimental modification.
-            MultiStepLR(
-                optimizer,
-                milestones=PAPER_EPOCH_BOUNDARIES[:-1],
-                gamma=PAPER_LR_DECAY,
-            )
-            for optimizer in optimizers
-        ]
+        if self.learning_rate_schedule is LearningRateSchedule.PAPER:
+            schedulers: list[LRScheduler] = [
+                # Framework-native expression of the paper schedule; this is an
+                # engineering modernization, not an experimental modification.
+                MultiStepLR(
+                    optimizer,
+                    milestones=PAPER_EPOCH_BOUNDARIES[:-1],
+                    gamma=PAPER_LR_DECAY,
+                )
+                for optimizer in optimizers
+            ]
+        else:
+            schedulers = [
+                CosineAnnealingLR(
+                    optimizer,
+                    T_max=self.hparams.schedule_epochs,
+                    eta_min=self.hparams.minimum_learning_rate,
+                )
+                for optimizer in optimizers
+            ]
         return optimizers, schedulers

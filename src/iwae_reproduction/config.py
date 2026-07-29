@@ -22,6 +22,13 @@ class Objective(StrEnum):
     DREG = "dreg"
 
 
+class LearningRateSchedule(StrEnum):
+    """Learning-rate schedules for faithful and accelerated experiments."""
+
+    PAPER = "paper"
+    COSINE = "cosine"
+
+
 # Cumulative boundaries of the paper's eight 3**i-pass stages. MultiStepLR is
 # an exact framework-native expression of the schedule, not a new schedule.
 PAPER_EPOCH_BOUNDARIES: tuple[int, ...] = (1, 4, 13, 40, 121, 364, 1093, 3280)

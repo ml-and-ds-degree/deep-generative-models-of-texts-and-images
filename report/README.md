@@ -2,18 +2,16 @@
 
 The academic briefing is available in two forms:
 
-- `main.tex`: single-column, two-part academic LaTeX source;
-- `briefing.md`: readable Markdown companion.
+- `main.tex`: single-column, three-part academic LaTeX source;
 
 The bibliography is maintained in `references.bib`. Figures are generated or
-copied into `figures/`. To regenerate the learning curve from the saved
-Lightning metrics:
+copied into `figures/`. The three conceptual visual abstracts under
+`figures/generated/` were created with the built-in image generator and are
+explicitly labelled as illustrative in the PDF. Regenerate the source-backed
+architecture, loss, schedule, and comparison figures from the saved artifacts:
 
 ```bash
-uv run --with reportlab==4.4.9 python report/scripts/plot_learning_curve.py
-pdftoppm -png -singlefile -r 160 \
-  report/figures/iwae_learning_curve.pdf \
-  report/figures/iwae_learning_curve
+uv run --with reportlab==4.4.9 python report/scripts/render_report_figures.py
 ```
 
 To build the LaTeX paper on a machine with a standard TeX distribution:
@@ -40,5 +38,9 @@ pdflatex main.tex
 pdflatex main.tex
 ```
 
-The source intentionally leaves the DReG results table as `TBD`. Fill it only
-after running DReG under the same budget and validating its artifacts.
+All reported IWAE, DReG, and progressive-DReG results are backed by the saved
+seed-236 artifacts and the shared evaluation protocol. KID uses the common
+`outputs/classifier/checkpoints/epoch-04.ckpt` feature extractor, 10,000 real
+and generated samples, 50 subsets of 1,000, and seed 236. The accelerated
+result remains single-seed evidence until the replication gate in
+`docs/training-acceleration.md` is completed.
