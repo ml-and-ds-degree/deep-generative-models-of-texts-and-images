@@ -35,48 +35,63 @@ def _label(canvas: Canvas, x: float, y: float, text: str, *, size: int = 8) -> N
 
 def render_architecture() -> None:
     output = FIGURES / "architecture.pdf"
-    canvas = Canvas(str(output), pagesize=(520, 245))
+    width, height = 650, 245
+    canvas = Canvas(str(output), pagesize=(width, height))
     canvas.setFillColor(white)
-    canvas.rect(0, 0, 520, 245, fill=1, stroke=0)
+    canvas.rect(0, 0, width, height, fill=1, stroke=0)
     canvas.setFillColor(NAVY)
-    canvas.setFont("Helvetica-Bold", 13)
-    canvas.drawString(28, 219, "One-stochastic-layer IWAE")
+    canvas.setFont("Helvetica-Bold", 15)
+    canvas.drawString(18, 219, "One-stochastic-layer IWAE: exact layer-by-layer architecture")
     canvas.setFillColor(SLATE)
-    canvas.setFont("Helvetica", 8)
+    canvas.setFont("Helvetica", 9)
     canvas.drawString(
-        28, 204, "The exact architecture used for the reconstruction and both extensions."
+        18, 203, "The same architecture is used for the reconstruction, DReG, and progressive DReG."
     )
 
     blocks = [
-        (33, 89, 105, 72, "Binarized MNIST", "784 Bernoulli pixels", NAVY),
-        (166, 89, 105, 72, "Encoder", "784 -> 200 -> 200", TEAL),
-        (299, 89, 105, 72, "Latent variable", "z in R^50", AMBER),
-        (432, 89, 72, 72, "Decoder", "50 -> 200 -> 784", TEAL),
+        (15, 89, 58, "Input x", "784 pixels", NAVY),
+        (85, 89, 60, "Encoder 1", "200 tanh", TEAL),
+        (157, 89, 60, "Encoder 2", "200 tanh", TEAL),
+        (229, 89, 80, "Posterior heads", "mean 50 | log std 50", TEAL),
+        (321, 89, 50, "Sample z", "50 dims", AMBER),
+        (383, 89, 60, "Decoder 1", "200 tanh", TEAL),
+        (455, 89, 60, "Decoder 2", "200 tanh", TEAL),
+        (527, 89, 70, "Output logits", "784 parameters", NAVY),
     ]
-    for x, y, width, height, title, subtitle, color in blocks:
+    for x, y, block_width, title, subtitle, color in blocks:
         canvas.setFillColor(PALE_TEAL if color is TEAL else HexColor("#F4F7FA"))
         canvas.setStrokeColor(color)
         canvas.setLineWidth(1.3)
-        canvas.roundRect(x, y, width, height, 9, fill=1, stroke=1)
+        canvas.roundRect(x, y, block_width, 72, 9, fill=1, stroke=1)
         canvas.setFillColor(color)
-        canvas.setFont("Helvetica-Bold", 9)
-        canvas.drawCentredString(x + width / 2, y + 43, title)
+        canvas.setFont("Helvetica-Bold", 11)
+        canvas.drawCentredString(x + block_width / 2, y + 43, title)
         canvas.setFillColor(SLATE)
         canvas.setFont("Helvetica", 8)
-        canvas.drawCentredString(x + width / 2, y + 27, subtitle)
-    for x in (141, 274, 407):
+        canvas.drawCentredString(x + block_width / 2, y + 26, subtitle)
+    for x in (73, 145, 217, 309, 371, 443, 515):
         canvas.setStrokeColor(SLATE)
         canvas.setLineWidth(1.4)
-        canvas.line(x, 125, x + 18, 125)
-        canvas.line(x + 18, 125, x + 13, 129)
-        canvas.line(x + 18, 125, x + 13, 121)
+        canvas.line(x + 2, 125, x + 10, 125)
+        canvas.line(x + 10, 125, x + 6, 129)
+        canvas.line(x + 10, 125, x + 6, 121)
+    canvas.setStrokeColor(TEAL)
+    canvas.setLineWidth(0.9)
+    canvas.line(84, 176, 309, 176)
+    canvas.setFillColor(TEAL)
+    canvas.setFont("Helvetica-Bold", 9)
+    canvas.drawCentredString(196, 182, "Recognition model q_phi(z | x)")
+    canvas.setStrokeColor(NAVY)
+    canvas.line(382, 176, 597, 176)
+    canvas.setFillColor(NAVY)
+    canvas.drawCentredString(489, 182, "Generative model p_theta(x | z)")
     canvas.setFillColor(SLATE)
     canvas.setFont("Helvetica", 8)
     canvas.drawCentredString(
-        260,
+        width / 2,
         54,
-        "Two tanh hidden layers per network; diagonal-Gaussian posterior; "
-        "factorized-Bernoulli likelihood",
+        "Two 200-unit tanh layers in each network; a 50-dimensional diagonal Gaussian posterior; "
+        "a factorized-Bernoulli decoder.",
     )
     canvas.showPage()
     canvas.save()
