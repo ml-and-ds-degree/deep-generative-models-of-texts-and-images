@@ -19,12 +19,17 @@ GRID = HexColor("#D9E2EA")
 PALE_TEAL = HexColor("#EAF5F6")
 
 
-def _series(path: Path, metric: str) -> list[tuple[int, float]]:
-    with path.open(newline="") as handle:
-        rows = csv.DictReader(handle)
-        return [
-            (int(row["epoch"]), float(row[metric])) for row in rows if row[metric]
-        ]
+def _series(paths: Path | tuple[Path, ...], metric: str) -> list[tuple[int, float]]:
+    """Read one metric, retaining the latest value for resumed epochs."""
+    if isinstance(paths, Path):
+        paths = (paths,)
+    values_by_epoch: dict[int, float] = {}
+    for path in paths:
+        with path.open(newline="") as handle:
+            for row in csv.DictReader(handle):
+                if row[metric]:
+                    values_by_epoch[int(row["epoch"])] = float(row[metric])
+    return sorted(values_by_epoch.items())
 
 
 def _label(canvas: Canvas, x: float, y: float, text: str, *, size: int = 8) -> None:
@@ -101,7 +106,7 @@ def _draw_train_validation_graph(
     *,
     output: Path,
     title: str,
-    metrics: Path,
+    metrics: Path | tuple[Path, ...],
     boundaries: tuple[int, ...] = (),
 ) -> None:
     """Render one comparable train-versus-validation curve for a completed run."""
@@ -183,7 +188,10 @@ def render_part_loss_graphs() -> None:
     _draw_train_validation_graph(
         output=FIGURES / "dreg_training_validation.pdf",
         title="Fixed-K DReG: training vs validation",
-        metrics=ROOT / "outputs/dreg/lightning_logs/version_0/metrics.csv",
+        metrics=tuple(
+            ROOT / f"outputs/dreg/lightning_logs/version_{version}/metrics.csv"
+            for version in range(3)
+        ),
     )
     _draw_train_validation_graph(
         output=FIGURES / "progressive_dreg_training_validation.pdf",
@@ -196,7 +204,13 @@ def render_part_loss_graphs() -> None:
 def render_loss_comparison() -> None:
     sources = {
         "IWAE reconstruction": (ROOT / "outputs/iwae/lightning_logs/version_0/metrics.csv", NAVY),
-        "DReG": (ROOT / "outputs/dreg/lightning_logs/version_0/metrics.csv", AMBER),
+        "DReG": (
+            tuple(
+                ROOT / f"outputs/dreg/lightning_logs/version_{version}/metrics.csv"
+                for version in range(3)
+            ),
+            AMBER,
+        ),
         "Progressive DReG": (ROOT / "outputs/fast-dreg/lightning_logs/version_0/metrics.csv", TEAL),
     }
     output = FIGURES / "loss_comparison.pdf"

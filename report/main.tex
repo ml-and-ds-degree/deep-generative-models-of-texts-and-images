@@ -147,6 +147,8 @@ decoder keeps the ordinary IWAE gradient.  Data, architecture, seed,
 initialization, $K=50$, batch size 20, Adam settings, 121-pass budget, and
 the validation/test procedures remain fixed, so the changed estimator is the
 intended experimental variable.
+The DReG run was resumed twice; its graph merges the three metric logs by
+training pass, retaining the latest record at overlapping passes.
 
 \section{Training versus validation}
 \begin{figure}[H]
