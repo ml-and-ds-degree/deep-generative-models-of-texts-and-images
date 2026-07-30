@@ -200,12 +200,13 @@ probabilities.  Brightness is the Bernoulli mean.}
 \part{Progressive-Particle Improvement}
 
 \section{Training set-up}
-This second improvement keeps DReG but changes the optimisation profile:
-batch size $20\rightarrow100$, particles $5\rightarrow10\rightarrow50$, and
-cosine learning-rate decay from $3\times10^{-3}$ to $10^{-4}$.  Validation is
-always $K=50$, making checkpoint selection directly comparable with fixed-$K$
-DReG.  It is an optimisation extension, not a claim of paper-faithful
-training.
+Our main goal is to reduce training time while improving both likelihood and
+sample-quality metrics.  This second improvement keeps DReG but changes the
+optimisation profile: batch size $20\rightarrow100$, particles
+$5\rightarrow10\rightarrow50$, and cosine learning-rate decay from
+$3\times10^{-3}$ to $10^{-4}$.  Validation is always $K=50$, making checkpoint
+selection directly comparable with fixed-$K$ DReG.  It is an optimisation
+extension, not a claim of paper-faithful training.
 
 \begin{figure}[H]
 \centering
