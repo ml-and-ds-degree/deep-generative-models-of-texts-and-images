@@ -40,7 +40,9 @@ after 121 passes.  DReG modestly improves likelihood to $87.480$ nats but not
 KID.  Progressive-particle DReG reaches $86.733$ nats, KID $178.08\pm21.76$,
 and trains in $14.0$ minutes rather than about $71.5$ minutes for fixed-$K$
 DReG.  All numerical comparisons use seed 236; they are evidence for a
-practical profile, not a multi-seed superiority claim.
+practical profile, not a multi-seed superiority claim.  We stopped every run
+at the paper's 121-pass early milestone because of hardware and time limits;
+the full paper schedule is 3,280 passes.
 \end{abstract}
 
 \part{Paper Reconstruction}
@@ -85,7 +87,7 @@ Training observations & dynamic Bernoulli binarization & matched \\
 Architecture, latent size, particles & MLP, $z\in\mathbb{R}^{50}$, $K=50$ & matched \\
 Initialization & Glorot; decoder log-odds output bias & matched \\
 Optimizer & Adam, $10^{-3}$, $\epsilon=10^{-4}$ & matched \\
-Schedule & eight staged milestones through pass 3,280 & matched milestones; run truncated at 121 \\
+Schedule & eight staged milestones through pass 3,280 & first five milestones (121 passes); stopped for hardware/time limits \\
 Reported test NLL / active units & $84.78$ / $25$ & comparison target \\
 \bottomrule
 \end{tabularx}
@@ -107,6 +109,9 @@ The validation trace is selected on the same scale used for every condition.}
 \section{Results against the paper}
 The reconstruction is $3.024$ nats above the paper's NLL after only $3.69\%$
 of the original pass budget, while reproducing the reported 25 active units.
+The 121 passes are the paper schedule's first five blocks
+($1+3+9+27+81$); we did not run the remaining 3,159 passes because of the
+available hardware and project time.
 \begin{table}[H]
 \centering
 \caption{Paper result and reconstruction.  NLL is the paper metric; lower is better.}
@@ -144,9 +149,9 @@ variance gradient estimator with the doubly reparameterized estimator of
 \end{equation}
 where $\operatorname{sg}$ stops gradients through the normalized weight.  The
 decoder keeps the ordinary IWAE gradient.  Data, architecture, seed,
-initialization, $K=50$, batch size 20, Adam settings, 121-pass budget, and
-the validation/test procedures remain fixed, so the changed estimator is the
-intended experimental variable.
+initialization, $K=50$, batch size 20, Adam settings, and the same 121-pass
+hardware/time cap remain fixed, as do the validation and test procedures.
+The changed estimator is therefore the intended experimental variable.
 The DReG run was resumed twice; its graph merges the three metric logs by
 training pass, retaining the latest record at overlapping passes.
 
@@ -230,8 +235,9 @@ replication uncertainty; the original paper did not report KID.
 
 \begin{table}[H]
 \centering
-\textbf{Matched seed-236 progressive-particle comparison against the
-reconstruction.} Lower NLL, KID, and time are better.
+\caption*{\textbf{Progressive-particle DReG versus reconstruction (seed 236).}
+Lower NLL, KID, and time are better.}
+\vspace{0.35em}
 \begin{tabular}{lrr}
 \toprule
 Metric & Reconstruction & Progressive DReG \\
@@ -259,23 +265,23 @@ decoder probabilities.  Brightness is the Bernoulli mean.}
 
 \section{Table 4: completed results}
 Table~\ref{tab:final-results} brings together the completed evidence.  The
-paper value remains the long-run reference; the three 121-pass runs are
-matched seed-236 experiments.  Lower NLL, KID, and time are better.
+three 121-pass runs are matched seed-236 experiments, stopped at the same
+paper-schedule milestone because of hardware and project-time limits.  Lower
+NLL, KID, and time are better.
 \begin{table}[H]
 \centering
-\caption{Required final comparison of the paper, reconstruction, and both
-improvement iterations.}
+\caption{Final comparison of the reconstruction and both improvement iterations.}
 \label{tab:final-results}
 \resizebox{\textwidth}{!}{%
-\begin{tabular}{lrrrr}
+\begin{tabular}{lrrr}
 \toprule
-Metric & Paper & Reconstruction & Fixed-$K$ DReG & Progressive DReG \\
+Metric & Reconstruction & Fixed-$K$ DReG & Progressive DReG \\
 \midrule
-Training passes & 3,280 & 121 & 121 & 121 \\
-Test $-\mathcal{L}_{5000}$ & \textbf{84.78} & 87.804 & 87.480 & \textbf{86.733} \\
-Active units & 25 & 25 & 26 & 30 \\
-KID & n/a & 196.70$\pm$23.05 & 206.80$\pm$26.91 & \textbf{178.08$\pm$21.76} \\
-End-to-end time (min) & n/a & 74.2 & approximately 71.5 & \textbf{14.0} \\
+Training passes & 121 & 121 & 121 \\
+Test $-\mathcal{L}_{5000}$ & 87.804 & 87.480 & \textbf{86.733} \\
+Active units & 25 & 26 & 30 \\
+KID & 196.70$\pm$23.05 & 206.80$\pm$26.91 & \textbf{178.08$\pm$21.76} \\
+End-to-end time (min) & 74.2 & approximately 71.5 & \textbf{14.0} \\
 \bottomrule
 \end{tabular}}
 \end{table}
@@ -304,16 +310,18 @@ the decoder's Bernoulli mean.}
   \item \textbf{What worked.}  The original architecture and training core
   reproduce the paper's 25 active units.  DReG improves NLL, while the
   progressive profile improves NLL, KID, and elapsed time simultaneously.
-  \item \textbf{What did not.}  DReG alone worsened KID in this run.  A
-  truncated 121-pass reconstruction does not match the paper's 3,280-pass NLL.
+  \item \textbf{What did not.}  DReG alone worsened KID in this run.  The
+  121-pass run is an early paper-schedule milestone, not the full 3,280-pass
+  reproduction, so it cannot be expected to match the paper's NLL.
   \item \textbf{What we learned.}  On this small IWAE, early $K=50$ particles
   are expensive before the proposal is useful.  Allocating particles over
   training is more consequential than changing the estimator alone.
-  \item \textbf{Limitations.}  All results use one seed.  The fixed-DReG
-  duration comes from interrupted-run artifacts, whereas progressive DReG is
-  one uninterrupted run.  Seeds 237 and 238, identical $\mathcal{L}_{5000}$
-  evaluation, KID, and a preregistered non-inferiority tolerance are needed
-  before claiming reliable superiority.
+  \item \textbf{Limitations.}  All results use one seed and are capped at 121
+  passes by available hardware and project time.  The fixed-DReG duration comes
+  from interrupted-run artifacts, whereas progressive DReG is one uninterrupted
+  run.  Seeds 237 and 238, full-schedule training, identical
+  $\mathcal{L}_{5000}$ evaluation, KID, and a preregistered non-inferiority
+  tolerance are needed before claiming reliable superiority.
 \end{itemize}
 
 \section*{Artifact availability and course-submission audit}
@@ -330,6 +338,7 @@ downloads public MNIST automatically from
 These cover the reconstruction code, improved-model code, public dataset
 access, and PDF report required by the Part 2 brief.
 
+\clearpage
 \bibliographystyle{plainnat}
 \bibliography{references}
 
