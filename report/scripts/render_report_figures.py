@@ -19,11 +19,11 @@ GRID = HexColor("#D9E2EA")
 PALE_TEAL = HexColor("#EAF5F6")
 
 
-def _series(path: Path) -> list[tuple[int, float]]:
+def _series(path: Path, metric: str) -> list[tuple[int, float]]:
     with path.open(newline="") as handle:
         rows = csv.DictReader(handle)
         return [
-            (int(row["epoch"]), float(row["val/nll_bound"])) for row in rows if row["val/nll_bound"]
+            (int(row["epoch"]), float(row[metric])) for row in rows if row[metric]
         ]
 
 
@@ -97,7 +97,103 @@ def render_architecture() -> None:
     canvas.save()
 
 
-def render_loss_graph() -> None:
+def _draw_train_validation_graph(
+    *,
+    output: Path,
+    title: str,
+    metrics: Path,
+    boundaries: tuple[int, ...] = (),
+) -> None:
+    """Render one comparable train-versus-validation curve for a completed run."""
+    width, height = 520, 300
+    left, right, bottom, top = 56, 24, 48, 48
+    canvas = Canvas(str(output), pagesize=(width, height))
+    canvas.setFillColor(white)
+    canvas.rect(0, 0, width, height, fill=1, stroke=0)
+    canvas.setFillColor(NAVY)
+    canvas.setFont("Helvetica-Bold", 13)
+    canvas.drawString(left, height - 24, title)
+    canvas.setFillColor(SLATE)
+    canvas.setFont("Helvetica", 8)
+    canvas.drawString(left, height - 38, "Negative L_50 in nats; lower is better.")
+    x0, x1, y0, y1 = 0, 120, 86, 132
+    plot_width = width - left - right
+    plot_height = height - bottom - top
+
+    def xpos(value: float) -> float:
+        return left + (value - x0) / (x1 - x0) * plot_width
+
+    def ypos(value: float) -> float:
+        return bottom + (value - y0) / (y1 - y0) * plot_height
+
+    for value in (90, 100, 110, 120, 130):
+        canvas.setStrokeColor(GRID)
+        canvas.setLineWidth(0.5)
+        canvas.line(left, ypos(value), width - right, ypos(value))
+        _label(canvas, left - 15, ypos(value) - 3, str(value))
+    for value in (0, 20, 40, 60, 80, 100, 120):
+        _label(canvas, xpos(value), bottom - 15, str(value))
+    canvas.setStrokeColor(black)
+    canvas.setLineWidth(0.8)
+    canvas.line(left, bottom, width - right, bottom)
+    canvas.line(left, bottom, left, height - top)
+    canvas.setFillColor(SLATE)
+    canvas.setFont("Helvetica", 8)
+    canvas.drawCentredString(left + plot_width / 2, 13, "Training pass")
+    canvas.saveState()
+    canvas.translate(14, bottom + plot_height / 2)
+    canvas.rotate(90)
+    canvas.drawCentredString(0, 0, "Negative bound (nats)")
+    canvas.restoreState()
+    series = {
+        "training": (_series(metrics, "train/nll_bound"), NAVY),
+        "validation": (_series(metrics, "val/nll_bound"), TEAL),
+    }
+    for index, (name, (points, color)) in enumerate(series.items()):
+        curve = canvas.beginPath()
+        for point_index, (epoch, value) in enumerate(points):
+            if point_index == 0:
+                curve.moveTo(xpos(epoch), ypos(value))
+            else:
+                curve.lineTo(xpos(epoch), ypos(value))
+        canvas.setStrokeColor(color)
+        canvas.setLineWidth(1.8)
+        canvas.drawPath(curve)
+        legend_x = left + index * 105
+        canvas.setLineWidth(2.2)
+        canvas.line(legend_x, height - 45, legend_x + 14, height - 45)
+        canvas.setFillColor(SLATE)
+        canvas.setFont("Helvetica", 8)
+        canvas.drawString(legend_x + 19, height - 48, name)
+    for boundary in boundaries:
+        canvas.setStrokeColor(AMBER)
+        canvas.setDash(2, 2)
+        canvas.line(xpos(boundary), bottom, xpos(boundary), height - top)
+    canvas.setDash()
+    canvas.showPage()
+    canvas.save()
+
+
+def render_part_loss_graphs() -> None:
+    _draw_train_validation_graph(
+        output=FIGURES / "iwae_training_validation.pdf",
+        title="IWAE reconstruction: training vs validation",
+        metrics=ROOT / "outputs/iwae/lightning_logs/version_0/metrics.csv",
+    )
+    _draw_train_validation_graph(
+        output=FIGURES / "dreg_training_validation.pdf",
+        title="Fixed-K DReG: training vs validation",
+        metrics=ROOT / "outputs/dreg/lightning_logs/version_0/metrics.csv",
+    )
+    _draw_train_validation_graph(
+        output=FIGURES / "progressive_dreg_training_validation.pdf",
+        title="Progressive DReG: training vs validation",
+        metrics=ROOT / "outputs/fast-dreg/lightning_logs/version_0/metrics.csv",
+        boundaries=(60, 100),
+    )
+
+
+def render_loss_comparison() -> None:
     sources = {
         "IWAE reconstruction": (ROOT / "outputs/iwae/lightning_logs/version_0/metrics.csv", NAVY),
         "DReG": (ROOT / "outputs/dreg/lightning_logs/version_0/metrics.csv", AMBER),
@@ -145,7 +241,7 @@ def render_loss_graph() -> None:
     canvas.drawCentredString(0, 0, "Validation negative bound (nats)")
     canvas.restoreState()
     for index, (name, (path, color)) in enumerate(sources.items()):
-        points = _series(path)
+        points = _series(path, "val/nll_bound")
         curve = canvas.beginPath()
         for point_index, (epoch, value) in enumerate(points):
             if point_index == 0:
@@ -166,6 +262,37 @@ def render_loss_graph() -> None:
         canvas.setDash(2, 2)
         canvas.line(xpos(boundary), bottom, xpos(boundary), height - top)
     canvas.setDash()
+    canvas.showPage()
+    canvas.save()
+
+
+def render_sample_comparison() -> None:
+    """Place identically seeded prior samples from all three models side by side."""
+    output = FIGURES / "sample_comparison.pdf"
+    width, height = 520, 230
+    canvas = Canvas(str(output), pagesize=(width, height))
+    canvas.setFillColor(white)
+    canvas.rect(0, 0, width, height, fill=1, stroke=0)
+    canvas.setFillColor(NAVY)
+    canvas.setFont("Helvetica-Bold", 13)
+    canvas.drawString(20, 204, "Prior samples from matched seed-236 checkpoints")
+    canvas.setFillColor(SLATE)
+    canvas.setFont("Helvetica", 8)
+    canvas.drawString(
+        20,
+        189,
+        "Each panel uses 64 identically seeded latent draws; brightness is Bernoulli mean.",
+    )
+    samples = [
+        ("Reconstruction (IWAE)", FIGURES / "iwae_samples_epoch120.png"),
+        ("Fixed-K DReG", FIGURES / "dreg_samples_epoch114.png"),
+        ("Progressive DReG", FIGURES / "progressive_dreg_samples_epoch116.png"),
+    ]
+    for x, (label, path) in zip((18, 187, 356), samples, strict=True):
+        canvas.setFillColor(SLATE)
+        canvas.setFont("Helvetica-Bold", 9)
+        canvas.drawCentredString(x + 73, 169, label)
+        canvas.drawImage(str(path), x, 16, width=146, height=146, mask="auto")
     canvas.showPage()
     canvas.save()
 
@@ -215,78 +342,13 @@ def render_training_profile() -> None:
     canvas.save()
 
 
-def render_results_chart() -> None:
-    output = FIGURES / "results_comparison.pdf"
-    canvas = Canvas(str(output), pagesize=(520, 285))
-    canvas.setFillColor(white)
-    canvas.rect(0, 0, 520, 285, fill=1, stroke=0)
-    canvas.setFillColor(NAVY)
-    canvas.setFont("Helvetica-Bold", 13)
-    canvas.drawString(28, 258, "Compact comparison of completed seed-236 runs")
-    canvas.setFillColor(SLATE)
-    canvas.setFont("Helvetica", 8)
-    canvas.drawString(
-        28,
-        243,
-        "Lower is better for NLL, KID, and elapsed training time. "
-        "KID bars show subset standard deviation.",
-    )
-    panels = [
-        (31, "Test NLL", [87.804, 87.480, 86.733], [0, 0, 0], 86, 89),
-        (194, "KID", [196.698, 206.798, 178.077], [23.047, 26.913, 21.759], 140, 245),
-        (357, "Time (min)", [74.2, 71.5, 14.0], [0, 0, 0], 0, 80),
-    ]
-    labels = ["IWAE", "DReG", "Prog."]
-    colors = [NAVY, AMBER, TEAL]
-    for x, title, values, errors, minimum, maximum in panels:
-        width, base, top = 132, 53, 207
-        canvas.setFillColor(SLATE)
-        canvas.setFont("Helvetica-Bold", 9)
-        canvas.drawCentredString(x + width / 2, 221, title)
-        canvas.setStrokeColor(GRID)
-        canvas.line(x, base, x + width, base)
-        for index, (value, error, color, label) in enumerate(
-            zip(values, errors, colors, labels, strict=True)
-        ):
-            bar_width, gap = 27, 15
-            left = x + 9 + index * (bar_width + gap)
-            height = max(4, (value - minimum) / (maximum - minimum) * (top - base))
-            canvas.setFillColor(color)
-            canvas.roundRect(left, base, bar_width, height, 3, fill=1, stroke=0)
-            if error:
-                error_height = error / (maximum - minimum) * (top - base)
-                middle = left + bar_width / 2
-                canvas.setStrokeColor(color)
-                canvas.setLineWidth(1)
-                canvas.line(
-                    middle, base + height - error_height, middle, base + height + error_height
-                )
-                canvas.line(
-                    middle - 4,
-                    base + height - error_height,
-                    middle + 4,
-                    base + height - error_height,
-                )
-                canvas.line(
-                    middle - 4,
-                    base + height + error_height,
-                    middle + 4,
-                    base + height + error_height,
-                )
-            canvas.setFillColor(black)
-            canvas.setFont("Helvetica-Bold", 7)
-            canvas.drawCentredString(left + bar_width / 2, base + height + 7, f"{value:.1f}")
-            _label(canvas, left + bar_width / 2, 39, label, size=7)
-    canvas.showPage()
-    canvas.save()
-
-
 def main() -> None:
     FIGURES.mkdir(parents=True, exist_ok=True)
     render_architecture()
-    render_loss_graph()
+    render_part_loss_graphs()
+    render_loss_comparison()
+    render_sample_comparison()
     render_training_profile()
-    render_results_chart()
 
 
 if __name__ == "__main__":

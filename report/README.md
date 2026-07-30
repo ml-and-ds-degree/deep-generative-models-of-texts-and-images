@@ -2,13 +2,13 @@
 
 The academic briefing is available in two forms:
 
-- `main.tex`: single-column, three-part academic LaTeX source;
+- `main.tex`: single-column, four-part academic LaTeX source;
 
 The bibliography is maintained in `references.bib`. Figures are generated or
-copied into `figures/`. The three conceptual visual abstracts under
-`figures/generated/` were created with the built-in image generator and are
-explicitly labelled as illustrative in the PDF. Regenerate the source-backed
-architecture, loss, schedule, and comparison figures from the saved artifacts:
+copied into `figures/`. Each experiment shows its own training-versus-validation
+curve and a 64-sample prior-predictive grid; the final section combines the
+three sample grids side by side. Regenerate the source-backed architecture,
+loss, schedule, and comparison figures from the saved artifacts:
 
 ```bash
 uv run --with reportlab==4.4.9 python report/scripts/render_report_figures.py

@@ -45,15 +45,6 @@ practical profile, not a multi-seed superiority claim.
 
 \part{Paper Reconstruction}
 
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.95\textwidth]{figures/generated/reproduction-visual-abstract.png}
-\caption{Conceptual visual abstract of the reconstruction pipeline.  This
-generated illustration is explanatory only; all reported measurements are
-shown in the source-backed figures and tables below.}
-\label{fig:reproduction-abstract}
-\end{figure}
-
 \section{Original architecture}
 For a binarized image $x$, the model samples
 $z_{1:K}\sim q_\phi(z\mid x)$ and maximizes
@@ -74,7 +65,7 @@ Gaussian and the decoder is Bernoulli.}
 \label{fig:architecture}
 \end{figure}
 
-\section{Paper results and training set-up}
+\section{Training set-up}
 The paper reports NLL in nats and active units.  NLL is estimated here by
 $-\mathcal{L}_{5000}$ (lower is better); an active unit has posterior-mean
 variance above $0.01$ across examples.  The public MNIST dataset is downloaded
@@ -100,19 +91,22 @@ Reported test NLL / active units & $84.78$ / $25$ & comparison target \\
 \end{tabularx}
 \end{table}
 
-\section{Reconstruction results and loss graph}
-The loss graph uses the shared validation $-\mathcal{L}_{50}$ metric.  The
-reconstruction is $3.024$ nats above the paper's NLL after only $3.69\%$ of
-the original pass budget, while reproducing the reported 25 active units.
+\section{Training versus validation}
+Training and validation use the shared $-\mathcal{L}_{50}$ objective; lower
+is better.  Validation uses a deterministic reference binarization, while
+training uses dynamic binarization.
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.94\textwidth]{figures/loss_comparison.pdf}
-\caption{Validation loss graph for all completed 121-pass conditions.  The
-two vertical guides mark the progressive model's particle transitions.}
-\label{fig:loss}
+\includegraphics[width=0.94\textwidth]{figures/iwae_training_validation.pdf}
+\caption{Reconstruction training versus validation $-\mathcal{L}_{50}$.
+The validation trace is selected on the same scale used for every condition.}
+\label{fig:iwae-training-validation}
 \end{figure}
 
+\section{Results against the paper}
+The reconstruction is $3.024$ nats above the paper's NLL after only $3.69\%$
+of the original pass budget, while reproducing the reported 25 active units.
 \begin{table}[H]
 \centering
 \caption{Paper result and reconstruction.  NLL is the paper metric; lower is better.}
@@ -131,22 +125,15 @@ KID & not reported & $196.70\pm23.05$ \\
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.34\textwidth]{figures/iwae_samples_epoch120.png}
-\caption{Prior predictive decoder probabilities from the reconstruction.
-Brightness is Bernoulli mean; this is a qualitative check, not the primary metric.}
-\label{fig:samples}
+\caption{Reconstruction: 64 identically seeded prior predictive decoder
+probabilities.  Brightness is the Bernoulli mean.}
+\label{fig:iwae-samples}
 \end{figure}
 
+\clearpage
 \part{DReG Improvement}
 
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.95\textwidth]{figures/generated/dreg-visual-abstract.png}
-\caption{Conceptual visual abstract of the DReG extension.  The generated
-illustration represents weighted latent paths and is not a measured gradient plot.}
-\label{fig:dreg-abstract}
-\end{figure}
-
-\section{Improved architecture and training set-up}
+\section{Training set-up}
 DReG is the assignment's meaningful loss/gradient modification: it retains
 the generative model and IWAE objective but replaces the encoder's high-
 variance gradient estimator with the doubly reparameterized estimator of
@@ -161,9 +148,16 @@ initialization, $K=50$, batch size 20, Adam settings, 121-pass budget, and
 the validation/test procedures remain fixed, so the changed estimator is the
 intended experimental variable.
 
-\section{Improved result: \texorpdfstring{fixed-$K$ DReG}{fixed-K DReG}}
-The shared loss graph in Figure~\ref{fig:loss} shows the fixed-$K$ DReG curve
-alongside the reconstruction and accelerated profiles.
+\section{Training versus validation}
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.94\textwidth]{figures/dreg_training_validation.pdf}
+\caption{Fixed-$K$ DReG training versus validation $-\mathcal{L}_{50}$.
+Both traces use the same axes as the reconstruction and progressive runs.}
+\label{fig:dreg-training-validation}
+\end{figure}
+
+\section{Results against reconstruction}
 \begin{table}[H]
 \centering
 \caption{Matched seed-236 DReG comparison.  The KID difference is not a
@@ -187,18 +181,18 @@ DReG improves NLL by $0.323$ nats but increases KID by $10.10$ points.
 Thus it is a limited likelihood improvement, not a broadly superior model
 under this single-seed evidence.
 
-\part{Progressive-Particle Improvement}
-
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.95\textwidth]{figures/generated/progressive-visual-abstract.png}
-\caption{Conceptual visual abstract of progressive-particle training.  The
-generated illustration conveys the curriculum; the exact schedule is in
-Figure~\ref{fig:schedule}.}
-\label{fig:progressive-abstract}
+\includegraphics[width=0.34\textwidth]{figures/dreg_samples_epoch114.png}
+\caption{Fixed-$K$ DReG: 64 identically seeded prior predictive decoder
+probabilities.  Brightness is the Bernoulli mean.}
+\label{fig:dreg-samples}
 \end{figure}
 
-\section{Improved training set-up}
+\clearpage
+\part{Progressive-Particle Improvement}
+
+\section{Training set-up}
 This second improvement keeps DReG but changes the optimisation profile:
 batch size $20\rightarrow100$, particles $5\rightarrow10\rightarrow50$, and
 cosine learning-rate decay from $3\times10^{-3}$ to $10^{-4}$.  Validation is
@@ -214,7 +208,16 @@ same $K=50$ objective as fixed-$K$ DReG.}
 \label{fig:schedule}
 \end{figure}
 
-\section{Improved results}
+\section{Training versus validation}
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.94\textwidth]{figures/progressive_dreg_training_validation.pdf}
+\caption{Progressive-particle DReG training versus validation
+$-\mathcal{L}_{50}$.  The particle transitions occur after passes 60 and 100.}
+\label{fig:progressive-training-validation}
+\end{figure}
+
+\section{Results against reconstruction}
 KID is the required course metric in addition to the paper's NLL.  It is
 computed as Kernel Inception Distance \citep{binkowski2018demystifying} in a
 frozen 128-dimensional MNIST-classifier feature space.  The shared classifier
@@ -225,8 +228,41 @@ replication uncertainty; the original paper did not report KID.
 
 \begin{table}[H]
 \centering
-\caption{Required comparison of paper, reconstruction, and improved models.
-Lower NLL, KID, and time are better.}
+\textbf{Matched seed-236 progressive-particle comparison against the
+reconstruction.} Lower NLL, KID, and time are better.
+\begin{tabular}{lrr}
+\toprule
+Metric & Reconstruction & Progressive DReG \\
+\midrule
+Selected checkpoint pass & 121 & 117 \\
+Best validation $-\mathcal{L}_{50}$ & 90.400 & 88.278 \\
+Test $-\mathcal{L}_{5000}$ & 87.804 & \textbf{86.733} \\
+Active units & 25 & 30 \\
+KID & 196.70$\pm$23.05 & \textbf{178.08$\pm$21.76} \\
+Training time (min) & 74.2 & \textbf{14.0} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.34\textwidth]{figures/progressive_dreg_samples_epoch116.png}
+\caption{Progressive-particle DReG: 64 identically seeded prior predictive
+decoder probabilities.  Brightness is the Bernoulli mean.}
+\label{fig:progressive-samples}
+\end{figure}
+
+\clearpage
+\part{Final Comparison}
+
+\section{Table 4: completed results}
+Table~\ref{tab:final-results} brings together the completed evidence.  The
+paper value remains the long-run reference; the three 121-pass runs are
+matched seed-236 experiments.  Lower NLL, KID, and time are better.
+\begin{table}[H]
+\centering
+\caption{Required final comparison of the paper, reconstruction, and both
+improvement iterations.}
 \label{tab:final-results}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{lrrrr}
@@ -242,12 +278,23 @@ End-to-end time (min) & n/a & 74.2 & approximately 71.5 & \textbf{14.0} \\
 \end{tabular}}
 \end{table}
 
+\section{Validation comparison}
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.94\textwidth]{figures/results_comparison.pdf}
-\caption{Generated comparison chart from the completed artifacts.  Error
-bars appear only for KID subset standard deviation.}
-\label{fig:results}
+\includegraphics[width=0.94\textwidth]{figures/loss_comparison.pdf}
+\caption{Final validation comparison of all completed 121-pass conditions.
+The vertical guides mark the progressive model's particle transitions.}
+\label{fig:loss-comparison}
+\end{figure}
+
+\section{Three generated sample grids}
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.94\textwidth]{figures/sample_comparison.pdf}
+\caption{Three identically seeded prior-sample grids shown side by side:
+reconstruction, fixed-$K$ DReG, and progressive-particle DReG.  Brightness is
+the decoder's Bernoulli mean.}
+\label{fig:sample-comparison}
 \end{figure}
 
 \section{Discussion and lessons}
