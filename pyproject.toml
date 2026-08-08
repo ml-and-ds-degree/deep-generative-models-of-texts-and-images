@@ -5,6 +5,7 @@ description = "Reproducible IWAE reconstruction and IWAE-DReG improvement on MNI
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "attrs>=26.1.0",
     "cyclopts>=4.21.1",
     "lightning>=2.6.5",
     "torch>=2.13.0",

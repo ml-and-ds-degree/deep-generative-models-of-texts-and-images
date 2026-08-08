@@ -30,7 +30,12 @@ from iwae_reproduction.classifier import (
     MNISTFeatureClassifier,
     MNISTFeatureExtractor,
 )
-from iwae_reproduction.config import PAPER_EPOCH_BOUNDARIES, LearningRateSchedule, Objective
+from iwae_reproduction.config import (
+    PAPER_EPOCH_BOUNDARIES,
+    LearningRateSchedule,
+    Objective,
+    ProgressiveParticleSchedule,
+)
 from iwae_reproduction.data import MNISTDataModule
 from iwae_reproduction.module import IWAELitModule
 from iwae_reproduction.objectives import dreg_encoder_loss, iwae_loss
@@ -193,23 +198,12 @@ def _progressive_particle_schedule(
     middle_particles: int,
     final_particles: int,
 ) -> tuple[tuple[int, ...], tuple[int, ...]]:
-    if max_epochs < 1:
-        raise ValueError("max_epochs must be positive")
-    if min(warmup_particles, middle_particles, final_particles) < 1:
-        raise ValueError("particle counts must be positive")
-    if not warmup_particles <= middle_particles <= final_particles:
-        raise ValueError("particle counts must be non-decreasing")
-    if max_epochs < 6 or warmup_particles == final_particles:
-        return (final_particles,), ()
-
-    first_boundary = max_epochs // 2
-    second_boundary = 5 * max_epochs // 6
-    counts = (warmup_particles, middle_particles, final_particles)
-    if warmup_particles == middle_particles:
-        return (warmup_particles, final_particles), (second_boundary,)
-    if middle_particles == final_particles:
-        return (warmup_particles, final_particles), (first_boundary,)
-    return counts, (first_boundary, second_boundary)
+    return ProgressiveParticleSchedule(
+        max_epochs=max_epochs,
+        warmup_particles=warmup_particles,
+        middle_particles=middle_particles,
+        final_particles=final_particles,
+    ).stages()
 
 
 def _run_training(

@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from enum import StrEnum
 
+from attrs import define, field, validators
+
 
 class Objective(StrEnum):
     """Supported encoder-gradient estimators.
@@ -27,6 +29,43 @@ class LearningRateSchedule(StrEnum):
 
     PAPER = "paper"
     COSINE = "cosine"
+
+
+@define(frozen=True)
+class ProgressiveParticleSchedule:
+    """Validated progressive-particle curriculum for a finite training budget."""
+
+    max_epochs: int = field(
+        validator=validators.and_(validators.instance_of(int), validators.gt(0))
+    )
+    warmup_particles: int = field(
+        validator=validators.and_(validators.instance_of(int), validators.gt(0))
+    )
+    middle_particles: int = field(
+        validator=validators.and_(validators.instance_of(int), validators.gt(0))
+    )
+    final_particles: int = field(
+        validator=validators.and_(validators.instance_of(int), validators.gt(0))
+    )
+
+    @final_particles.validator
+    def _particle_counts_are_non_decreasing(self, _attribute: object, _value: int) -> None:
+        if not self.warmup_particles <= self.middle_particles <= self.final_particles:
+            raise ValueError("particle counts must be non-decreasing")
+
+    def stages(self) -> tuple[tuple[int, ...], tuple[int, ...]]:
+        """Return training particle counts and zero-based transition boundaries."""
+        if self.max_epochs < 6 or self.warmup_particles == self.final_particles:
+            return (self.final_particles,), ()
+
+        first_boundary = self.max_epochs // 2
+        second_boundary = 5 * self.max_epochs // 6
+        counts = (self.warmup_particles, self.middle_particles, self.final_particles)
+        if self.warmup_particles == self.middle_particles:
+            return (self.warmup_particles, self.final_particles), (second_boundary,)
+        if self.middle_particles == self.final_particles:
+            return (self.warmup_particles, self.final_particles), (first_boundary,)
+        return counts, (first_boundary, second_boundary)
 
 
 # Cumulative boundaries of the paper's eight 3**i-pass stages. MultiStepLR is

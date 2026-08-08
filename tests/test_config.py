@@ -5,7 +5,11 @@ import unittest
 import torch
 
 from iwae_reproduction.cli import _progressive_particle_schedule
-from iwae_reproduction.config import PAPER_EPOCH_BOUNDARIES, PAPER_LR_DECAY
+from iwae_reproduction.config import (
+    PAPER_EPOCH_BOUNDARIES,
+    PAPER_LR_DECAY,
+    ProgressiveParticleSchedule,
+)
 
 
 class PaperScheduleTests(unittest.TestCase):
@@ -40,3 +44,7 @@ class ProgressiveScheduleTests(unittest.TestCase):
     def test_particle_schedule_must_be_non_decreasing(self) -> None:
         with self.assertRaises(ValueError):
             _progressive_particle_schedule(121, 10, 5, 50)
+
+    def test_particle_schedule_rejects_non_positive_parameters(self) -> None:
+        with self.assertRaises(ValueError):
+            ProgressiveParticleSchedule(0, 5, 10, 50)
