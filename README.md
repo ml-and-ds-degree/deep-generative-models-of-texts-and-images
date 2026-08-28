@@ -1,4 +1,42 @@
-# IWAE reconstruction and DReG improvement
+# Deep generative model reproductions
+
+This repository now contains two independent, modern PyTorch Lightning
+reproductions with Cyclopts command-line interfaces:
+
+- `iwae`: the IWAE reconstruction and DReG experiments described below;
+- `made`: Germain et al.'s Masked Autoencoder for Distribution Estimation.
+
+## MADE reproduction
+
+The default MADE command targets the paper's compute-feasible image condition:
+statically binarized MNIST, one 8,000-unit ReLU hidden layer, one shuffled fixed
+mask, orthogonal initialization, Adagrad at 0.01, batch size 100, and early
+stopping after 30 validation epochs without improvement. The reported paper
+target is **88.40 ± 0.45 test nats**.
+
+The original prepared dataset is downloaded from a pinned commit in the
+authors' repository and checked against a SHA-256 digest. The model's input
+ordering and hidden connectivity are deterministic functions of a saved mask
+seed and mask index, so checkpoints retain the exact autoregressive graph.
+The complete fidelity mapping and run protocol are in
+[`docs/made-reproduction.md`](docs/made-reproduction.md).
+
+```bash
+uv sync
+uv run made download binarized-mnist
+uv run made train binarized-mnist --accelerator mps
+uv run made evaluate outputs/made/binarized_mnist/checkpoints/BEST.ckpt \
+  binarized-mnist \
+  --accelerator mps
+uv run made sample outputs/made/binarized_mnist/checkpoints/BEST.ckpt \
+  --output outputs/made/binarized_mnist/samples.npz --accelerator mps
+```
+
+Use `--fast-dev-run` for an integration check. The DNA mask-sampling preset is
+also available, but its paper-faithful 300-mask validation and 1,000-mask test
+ensembles are substantially slower than the fixed-mask MNIST experiment.
+
+## IWAE reconstruction and DReG improvement
 
 This project reproduces the one-stochastic-layer Importance Weighted
 Autoencoder (IWAE) from Burda, Grosse, and Salakhutdinov (2015), then changes

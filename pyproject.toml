@@ -1,7 +1,7 @@
 [project]
 name = "deep-generative-models-of-texts-and-images"
 version = "0.1.0"
-description = "Reproducible IWAE reconstruction and IWAE-DReG improvement on MNIST"
+description = "Reproducible modern reconstructions of deep generative models"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -19,13 +19,14 @@ dependencies = [
 
 [project.scripts]
 iwae = "iwae_reproduction.cli:app"
+made = "made_reproduction.cli:app"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/iwae_reproduction"]
+packages = ["src/iwae_reproduction", "src/made_reproduction"]
 
 [tool.ruff]
 line-length = 100
