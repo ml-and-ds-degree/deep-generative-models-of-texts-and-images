@@ -22,11 +22,12 @@ class ActivationName(StrEnum):
 
 
 class OptimizerName(StrEnum):
-    """Optimizers used by the selected paper experiments."""
+    """Optimizers used by the selected paper experiments and architecture studies."""
 
     SGD = "sgd"
     ADAGRAD = "adagrad"
     ADADELTA = "adadelta"
+    ADAMW = "adamw"
 
 
 class MaskMode(StrEnum):
@@ -45,6 +46,7 @@ class ArchitectureName(StrEnum):
     LMCONV = "lmconv"
     PIXELCNN = "pixelcnn"
     RESIDUAL = "residual"
+    ATTENTION = "attention"
 
 
 @dataclass(frozen=True)
@@ -55,6 +57,10 @@ class ImprovementPreset:
     hidden_dim: int
     residual_blocks: int
     direct_input_to_output: bool
+    num_heads: int = 4
+    dropout: float = 0.0
+    optimizer: OptimizerName | None = None
+    learning_rate: float | None = None
 
 
 @dataclass(frozen=True)
@@ -220,6 +226,23 @@ DIRECT_MNIST_PRESET = ImprovementPreset(
 # wide path while the zero-initialized 512-unit branch learns an additional
 # causal correction instead of disrupting the established logits at startup.
 DEEP_MNIST_HIDDEN_DIMS = (8_000, 512)
+
+
+# Residual LayerNorm attention-MADE: the original masked autoencoder's order
+# and Bernoulli likelihood, with the assignment's residual, normalisation,
+# attention, and dropout regularisation applied to the hidden transformation.
+# AdamW is the optimiser these blocks are conventionally trained with; it is
+# not the architectural claim.
+ATTENTION_MNIST_PRESET = ImprovementPreset(
+    architecture=ArchitectureName.ATTENTION,
+    hidden_dim=256,
+    residual_blocks=2,
+    direct_input_to_output=False,
+    num_heads=4,
+    dropout=0.1,
+    optimizer=OptimizerName.ADAMW,
+    learning_rate=1e-3,
+)
 
 
 def paper_preset(dataset: DatasetName | str) -> PaperPreset:

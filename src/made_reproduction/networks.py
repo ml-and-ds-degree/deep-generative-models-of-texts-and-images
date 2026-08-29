@@ -335,6 +335,140 @@ class ResidualMADE(nn.Module):
         return samples
 
 
+class AttentionMADE(nn.Module):
+    """MADE with residual LayerNorm Transformer blocks on the paper ordering.
+
+    Inputs are permuted into the sampled MADE degree order, right-shifted so
+    position ``t`` never sees ``x_t``, then encoded with ``TransformerEncoder``
+    (pre-norm residual attention and MLP, dropout, final LayerNorm). Logits are
+    scattered back to the original pixel layout. The causal mask is PyTorch's
+    square subsequent mask; the only MADE-specific tensor is the degree
+    permutation.
+    """
+
+    def __init__(
+        self,
+        input_dim: int,
+        hidden_dim: int,
+        residual_blocks: int,
+        *,
+        num_heads: int = 4,
+        dropout: float = 0.1,
+        mask_seed: int = 1234,
+    ):
+        super().__init__()
+        if input_dim < 2:
+            raise ValueError("MADE requires at least two input dimensions")
+        if hidden_dim < 1 or residual_blocks < 1:
+            raise ValueError("hidden_dim and residual_blocks must be positive")
+        if hidden_dim % num_heads != 0:
+            raise ValueError("hidden_dim must be divisible by num_heads")
+        if not 0.0 <= dropout < 1.0:
+            raise ValueError("dropout must lie in [0, 1)")
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
+        self.residual_blocks_count = residual_blocks
+        self.num_heads = num_heads
+        self.dropout_p = dropout
+        self.mask_seed = mask_seed
+
+        self.value_proj = nn.Linear(1, hidden_dim)
+        self.position_embed = nn.Embedding(input_dim, hidden_dim)
+        self.start_token = nn.Parameter(torch.zeros(1, 1, hidden_dim))
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=hidden_dim,
+            nhead=num_heads,
+            dim_feedforward=4 * hidden_dim,
+            dropout=dropout,
+            activation="relu",
+            batch_first=True,
+            norm_first=True,
+        )
+        self.encoder = nn.TransformerEncoder(
+            encoder_layer,
+            num_layers=residual_blocks,
+            norm=nn.LayerNorm(hidden_dim),
+            enable_nested_tensor=False,
+        )
+        self.output_head = nn.Linear(hidden_dim, 1)
+        self.register_buffer("input_degrees", torch.arange(1, input_dim + 1))
+        self.register_buffer("generation_order", torch.arange(input_dim))
+        self.register_buffer("mask_index", torch.tensor(0, dtype=torch.long))
+        self.register_buffer(
+            "causal_mask",
+            nn.Transformer.generate_square_subsequent_mask(input_dim),
+        )
+        nn.init.normal_(self.start_token, mean=0.0, std=0.02)
+        nn.init.normal_(self.value_proj.weight, mean=0.0, std=0.02)
+        nn.init.zeros_(self.value_proj.bias)
+        nn.init.normal_(self.position_embed.weight, mean=0.0, std=0.02)
+        nn.init.zeros_(self.output_head.weight)
+        nn.init.zeros_(self.output_head.bias)
+        self.set_masks(0)
+
+    @torch.no_grad()
+    def set_masks(self, index: int) -> None:
+        """Sample the MADE input permutation; Transformer positions stay 0..D-1."""
+
+        if index < 0:
+            raise ValueError("mask index must be non-negative")
+        generator = torch.Generator(device="cpu").manual_seed(self.mask_seed + index)
+        input_degrees = torch.randperm(self.input_dim, generator=generator) + 1
+        self.input_degrees.copy_(input_degrees)
+        self.generation_order.copy_(torch.argsort(input_degrees))
+        self.mask_index.fill_(index)
+
+    @torch.no_grad()
+    def resample_masks(self) -> None:
+        self.set_masks(int(self.mask_index.item()) + 1)
+
+    def _ordered_tokens(self, inputs: Tensor) -> Tensor:
+        ordered = inputs[:, self.generation_order]
+        previous = self.value_proj(ordered[:, :-1].unsqueeze(-1))
+        start = self.start_token.expand(inputs.shape[0], 1, -1)
+        positions = torch.arange(self.input_dim, device=inputs.device)
+        return torch.cat([start, previous], dim=1) + self.position_embed(positions)
+
+    def forward(self, inputs: Tensor) -> Tensor:
+        tokens = self._ordered_tokens(inputs)
+        hidden = self.encoder(tokens, mask=self.causal_mask)
+        ordered_logits = self.output_head(hidden).squeeze(-1)
+        logits = inputs.new_empty(inputs.shape)
+        logits[:, self.generation_order] = ordered_logits
+        return logits
+
+    def log_prob(self, inputs: Tensor) -> Tensor:
+        return -F.binary_cross_entropy_with_logits(
+            self(inputs), inputs, reduction="none"
+        ).sum(dim=-1)
+
+    def ensemble_log_prob(self, inputs: Tensor, masks: int, *, start_index: int) -> Tensor:
+        if masks < 1 or start_index < 0:
+            raise ValueError("masks must be positive and start_index non-negative")
+        original_index = int(self.mask_index.item())
+        log_probabilities = []
+        try:
+            for index in range(start_index, start_index + masks):
+                self.set_masks(index)
+                log_probabilities.append(self.log_prob(inputs))
+        finally:
+            self.set_masks(original_index)
+        stacked = torch.stack(log_probabilities, dim=0)
+        return torch.logsumexp(stacked, dim=0) - math.log(masks)
+
+    @torch.no_grad()
+    def sample(
+        self, count: int, *, generator: torch.Generator | None = None
+    ) -> Tensor:
+        if count < 1:
+            raise ValueError("count must be positive")
+        samples = torch.zeros(count, self.input_dim, device=self.input_degrees.device)
+        for variable in self.generation_order:
+            probabilities = torch.sigmoid(self(samples)[:, variable])
+            samples[:, variable] = torch.bernoulli(probabilities, generator=generator)
+        return samples
+
+
 class LocallyMaskedConv2d(nn.Module):
     """Shared convolution weights with a causal mask at every image location."""
 

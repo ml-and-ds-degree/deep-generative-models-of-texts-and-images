@@ -8,6 +8,7 @@ from torch.utils.data import DataLoader
 
 from made_reproduction.module import MADELitModule
 from made_reproduction.networks import (
+    AttentionMADE,
     LocallyMaskedConvMADE,
     MADE,
     PixelCNNMADE,
@@ -107,6 +108,33 @@ class MADEArchitectureTests(unittest.TestCase):
                 gradient[output_index:], torch.zeros_like(gradient[output_index:])
             )
 
+    def test_attention_made_preserves_autoregressive_dependencies(self) -> None:
+        model = AttentionMADE(
+            8, 16, 2, num_heads=4, dropout=0.0, mask_seed=41
+        ).eval()
+        inputs = torch.randn(1, 8, requires_grad=True)
+        logits = model(inputs)
+        for output_index in range(8):
+            gradient = torch.autograd.grad(
+                logits[0, output_index], inputs, retain_graph=True
+            )[0][0]
+            forbidden = model.input_degrees >= model.input_degrees[output_index]
+            torch.testing.assert_close(
+                gradient[forbidden],
+                torch.zeros_like(gradient[forbidden]),
+                atol=1e-5,
+                rtol=1e-5,
+            )
+
+    def test_attention_made_mask_indices_are_reproducible(self) -> None:
+        first = AttentionMADE(9, 16, 1, num_heads=4, dropout=0.0, mask_seed=23)
+        second = AttentionMADE(9, 16, 1, num_heads=4, dropout=0.0, mask_seed=23)
+        torch.testing.assert_close(first.input_degrees, second.input_degrees)
+        torch.testing.assert_close(first.generation_order, second.generation_order)
+        old_order = first.generation_order.clone()
+        first.resample_masks()
+        self.assertFalse(torch.equal(old_order, first.generation_order))
+
     def test_unbiased_mmd_is_permutation_invariant(self) -> None:
         values = torch.tensor([[0.0, 1.0], [1.0, 0.0], [1.0, 1.0]])
         permuted = values[torch.tensor([2, 0, 1])]
@@ -151,3 +179,32 @@ class MADELightningTests(unittest.TestCase):
                 deterministic=True,
             )
             trainer.fit(model, train_dataloaders=batches, val_dataloaders=batches)
+
+    def test_attention_architecture_completes_a_training_step(self) -> None:
+        L.seed_everything(11)
+        batches = DataLoader(torch.bernoulli(torch.full((6, 8), 0.5)), batch_size=3)
+        model = MADELitModule(
+            input_dim=8,
+            hidden_dims=(16,),
+            architecture="attention",
+            residual_blocks=2,
+            num_heads=4,
+            dropout=0.0,
+            optimizer="adamw",
+            learning_rate=1e-3,
+            mask_seed=11,
+        )
+        optimizer = model.configure_optimizers()
+        self.assertIsInstance(optimizer, torch.optim.AdamW)
+        trainer = L.Trainer(
+            accelerator="cpu",
+            max_epochs=1,
+            limit_train_batches=1,
+            limit_val_batches=1,
+            logger=False,
+            enable_checkpointing=False,
+            enable_progress_bar=False,
+            enable_model_summary=False,
+            deterministic=True,
+        )
+        trainer.fit(model, train_dataloaders=batches, val_dataloaders=batches)

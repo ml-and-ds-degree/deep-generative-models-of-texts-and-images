@@ -17,6 +17,7 @@ from made_reproduction.config import (
 )
 from made_reproduction.networks import (
     MADE,
+    AttentionMADE,
     LocallyMaskedConvMADE,
     PixelCNNMADE,
     ResidualMADE,
@@ -45,6 +46,8 @@ class MADELitModule(L.LightningModule):
         learning_rate: float = 0.01,
         decay: float = 0.0,
         epsilon: float = 0.0,
+        num_heads: int = 4,
+        dropout: float = 0.0,
     ):
         super().__init__()
         self.mask_mode = MaskMode(mask_mode)
@@ -69,6 +72,8 @@ class MADELitModule(L.LightningModule):
                 "learning_rate": learning_rate,
                 "decay": decay,
                 "epsilon": epsilon,
+                "num_heads": num_heads,
+                "dropout": dropout,
             }
         )
         if validation_masks < 1 or test_masks < 1:
@@ -112,7 +117,7 @@ class MADELitModule(L.LightningModule):
                 mask_seed=mask_seed,
                 direct_input_to_output=direct_input_to_output,
             )
-        else:
+        elif self.architecture is ArchitectureName.PIXELCNN:
             if len(hidden_dims) != 1:
                 raise ValueError("PixelCNN MADE uses one channel width")
             self.model = PixelCNNMADE(
@@ -121,6 +126,19 @@ class MADELitModule(L.LightningModule):
                 residual_blocks=residual_blocks,
                 direct_input_to_output=direct_input_to_output,
             )
+        elif self.architecture is ArchitectureName.ATTENTION:
+            if len(hidden_dims) != 1:
+                raise ValueError("attention MADE uses exactly one hidden width")
+            self.model = AttentionMADE(
+                input_dim=input_dim,
+                hidden_dim=hidden_dims[0],
+                residual_blocks=residual_blocks,
+                num_heads=num_heads,
+                dropout=dropout,
+                mask_seed=mask_seed,
+            )
+        else:
+            raise ValueError(f"unsupported architecture {self.architecture.value}")
         self.test_nll = MeanMetric()
 
     def _log_prob(self, batch: Tensor, *, masks: int, start_index: int) -> Tensor:
@@ -190,6 +208,12 @@ class MADELitModule(L.LightningModule):
                 self.parameters(),
                 lr=self.hparams.learning_rate,
                 eps=self.hparams.epsilon,
+            )
+        if self.optimizer_name is OptimizerName.ADAMW:
+            return torch.optim.AdamW(
+                self.parameters(),
+                lr=self.hparams.learning_rate,
+                weight_decay=0.0,
             )
         return torch.optim.Adadelta(
             self.parameters(),

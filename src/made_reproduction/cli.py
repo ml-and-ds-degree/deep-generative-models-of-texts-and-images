@@ -14,9 +14,11 @@ import torch
 from cyclopts import App
 from lightning import Fabric
 from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
+from lightning.pytorch.loggers import CSVLogger
 
 from made_reproduction.config import (
     ArchitectureName,
+    ATTENTION_MNIST_PRESET,
     DEEP_MNIST_HIDDEN_DIMS,
     DatasetName,
     DIRECT_MNIST_PRESET,
@@ -119,7 +121,7 @@ def train(
     limit_train_batches: int | None = None,
     limit_val_batches: int | None = None,
 ) -> None:
-    """Train paper MADE or the fixed degree-preserving residual candidate."""
+    """Train paper MADE or a binarized-MNIST architecture-improvement candidate."""
 
     preset = paper_preset(dataset)
     resolved_batch_size = _resolved(batch_size, preset.batch_size)
@@ -142,18 +144,24 @@ def train(
     )
     data.prepare_data()
     data.setup("fit")
+    resolved_optimizer = preset.optimizer
+    resolved_learning_rate = preset.learning_rate
+    num_heads = 4
+    dropout = 0.0
+    residual_blocks = 0
+    hidden_to_output_skips = False
+    zero_init_final_branch = False
     if architecture is ArchitectureName.PAPER:
         hidden_dims = preset.hidden_dims
         direct_input_to_output = preset.direct_input_to_output
-        residual_blocks = 0
     elif architecture is ArchitectureName.DIRECT:
         hidden_dims = (DIRECT_MNIST_PRESET.hidden_dim,)
         direct_input_to_output = DIRECT_MNIST_PRESET.direct_input_to_output
-        residual_blocks = DIRECT_MNIST_PRESET.residual_blocks
     elif architecture is ArchitectureName.DEEP:
         hidden_dims = DEEP_MNIST_HIDDEN_DIMS
         direct_input_to_output = True
-        residual_blocks = 0
+        hidden_to_output_skips = True
+        zero_init_final_branch = True
     elif architecture is ArchitectureName.LMCONV:
         hidden_dims = (32,)
         direct_input_to_output = True
@@ -162,12 +170,22 @@ def train(
         hidden_dims = (32,)
         direct_input_to_output = True
         residual_blocks = 4
-    else:
+    elif architecture is ArchitectureName.ATTENTION:
+        hidden_dims = (ATTENTION_MNIST_PRESET.hidden_dim,)
+        direct_input_to_output = ATTENTION_MNIST_PRESET.direct_input_to_output
+        residual_blocks = ATTENTION_MNIST_PRESET.residual_blocks
+        num_heads = ATTENTION_MNIST_PRESET.num_heads
+        dropout = ATTENTION_MNIST_PRESET.dropout
+        if ATTENTION_MNIST_PRESET.optimizer is not None:
+            resolved_optimizer = ATTENTION_MNIST_PRESET.optimizer
+        if ATTENTION_MNIST_PRESET.learning_rate is not None:
+            resolved_learning_rate = ATTENTION_MNIST_PRESET.learning_rate
+    elif architecture is ArchitectureName.RESIDUAL:
         hidden_dims = (RESIDUAL_MNIST_PRESET.hidden_dim,)
         direct_input_to_output = RESIDUAL_MNIST_PRESET.direct_input_to_output
         residual_blocks = RESIDUAL_MNIST_PRESET.residual_blocks
-    hidden_to_output_skips = architecture is ArchitectureName.DEEP
-    zero_init_final_branch = architecture is ArchitectureName.DEEP
+    else:
+        raise ValueError(f"unsupported architecture {architecture.value}")
     if resume_from is None:
         model = MADELitModule(
             input_dim=data.spec.input_dim,
@@ -182,10 +200,12 @@ def train(
             mask_mode=preset.mask_mode,
             validation_masks=preset.validation_masks,
             test_masks=preset.test_masks,
-            optimizer=preset.optimizer,
-            learning_rate=preset.learning_rate,
+            optimizer=resolved_optimizer,
+            learning_rate=resolved_learning_rate,
             decay=preset.decay,
             epsilon=preset.epsilon,
+            num_heads=num_heads,
+            dropout=dropout,
         )
     else:
         model = MADELitModule.load_from_checkpoint(resume_from)
@@ -234,14 +254,16 @@ def train(
             "patience": resolved_patience,
             "hidden_dims": list(hidden_dims),
             "activation": preset.activation.value,
-            "optimizer": preset.optimizer.value,
-            "learning_rate": preset.learning_rate,
+            "optimizer": resolved_optimizer.value,
+            "learning_rate": resolved_learning_rate,
             "decay": preset.decay,
             "epsilon": preset.epsilon,
             "mask_mode": preset.mask_mode.value,
             "validation_masks": preset.validation_masks,
             "test_masks": preset.test_masks,
             "direct_input_to_output": direct_input_to_output,
+            "num_heads": num_heads,
+            "dropout": dropout,
             "paper_test_nll": preset.paper_test_nll,
             "paper_test_nll_ci95": preset.paper_test_nll_ci95,
     }
@@ -259,6 +281,8 @@ def train(
         "callbacks": [checkpoint, early_stopping],
         "fast_dev_run": fast_dev_run,
     }
+    if architecture is ArchitectureName.ATTENTION:
+        trainer_arguments["logger"] = CSVLogger(run_dir, name="csv")
     if limit_train_batches is not None:
         trainer_arguments["limit_train_batches"] = limit_train_batches
     if limit_val_batches is not None:
