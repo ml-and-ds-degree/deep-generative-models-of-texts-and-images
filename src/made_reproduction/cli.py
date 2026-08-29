@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import platform
-from time import perf_counter
+import shutil
 from pathlib import Path
+from time import perf_counter
 from typing import Literal
 
 import lightning as L
@@ -17,12 +18,16 @@ from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
 from lightning.pytorch.loggers import CSVLogger
 
 from made_reproduction.config import (
-    ArchitectureName,
     ATTENTION_MNIST_PRESET,
     DEEP_MNIST_HIDDEN_DIMS,
-    DatasetName,
     DIRECT_MNIST_PRESET,
+    GATED_PIXELCNN_MNIST_PRESET,
+    LMCONV_ENSEMBLE_MNIST_PRESET,
+    LMCONV_ENSEMBLE_ORDERS,
     RESIDUAL_MNIST_PRESET,
+    ArchitectureName,
+    DatasetName,
+    MaskMode,
     paper_preset,
 )
 from made_reproduction.data import MADEDataModule
@@ -36,10 +41,93 @@ app = App(
 
 Accelerator = Literal["auto", "cpu", "mps", "gpu", "tpu"]
 Precision = Literal["32-true", "16-mixed", "bf16-mixed"]
+COLAB_DRIVE_ROOT = Path("/content/drive/MyDrive")
+COLAB_CHECKPOINT_EXPORT = COLAB_DRIVE_ROOT / "made-attention"
 
 
 def _resolved(value, default):
     return default if value is None else value
+
+
+def _resolve_checkpoint_export_dir(explicit: Path | None) -> Path | None:
+    """Copy checkpoints to Drive when it is already mounted; otherwise stay local."""
+
+    if explicit is not None:
+        return explicit
+    if COLAB_DRIVE_ROOT.is_dir():
+        return COLAB_CHECKPOINT_EXPORT
+    return None
+
+
+def export_best_checkpoint(
+    source: Path,
+    destination: Path,
+    *,
+    score: float | None = None,
+) -> Path:
+    """Write the best checkpoint under a stable name and keep the Lightning filename."""
+
+    if not source.exists():
+        raise FileNotFoundError(source)
+    destination.mkdir(parents=True, exist_ok=True)
+    named = destination / source.name
+    shutil.copy2(source, named)
+    shutil.copy2(source, destination / "best.ckpt")
+    payload = {
+        "checkpoint": source.name,
+        "source": str(source.resolve()),
+        "best_model_score": score,
+    }
+    (destination / "best_checkpoint.json").write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return named
+
+
+class _ExportBestCheckpoint(L.Callback):
+    """Mirror Lightning's best val/nll checkpoint whenever it changes."""
+
+    def __init__(self, destination: Path):
+        super().__init__()
+        self.destination = destination
+        self._copied: str | None = None
+
+    def _export(self, trainer: L.Trainer) -> None:
+        for callback in trainer.checkpoint_callbacks:
+            if not isinstance(callback, ModelCheckpoint):
+                continue
+            best = callback.best_model_path
+            if not best or best == self._copied:
+                return
+            source = Path(best)
+            if not source.exists():
+                return
+            score = callback.best_model_score
+            export_best_checkpoint(
+                source,
+                self.destination,
+                score=None if score is None else float(score),
+            )
+            self._copied = best
+            print(f"exported best checkpoint {source.name} -> {self.destination / 'best.ckpt'}")
+            return
+
+    def on_validation_epoch_end(self, trainer: L.Trainer, pl_module: L.LightningModule) -> None:
+        del pl_module
+        if trainer.sanity_checking:
+            return
+        try:
+            self._export(trainer)
+        except OSError as error:
+            print(f"checkpoint export failed: {error}")
+
+    def on_fit_end(self, trainer: L.Trainer, pl_module: L.LightningModule) -> None:
+        del pl_module
+        try:
+            self._export(trainer)
+        except OSError as error:
+            print(f"checkpoint export failed: {error}")
 
 
 def _manifest(path: Path, values: dict) -> None:
@@ -120,6 +208,7 @@ def train(
     architecture: ArchitectureName = ArchitectureName.PAPER,
     limit_train_batches: int | None = None,
     limit_val_batches: int | None = None,
+    export_checkpoint_dir: Path | None = None,
 ) -> None:
     """Train paper MADE or a binarized-MNIST architecture-improvement candidate."""
 
@@ -146,6 +235,9 @@ def train(
     data.setup("fit")
     resolved_optimizer = preset.optimizer
     resolved_learning_rate = preset.learning_rate
+    resolved_mask_mode = preset.mask_mode
+    resolved_validation_masks = preset.validation_masks
+    resolved_test_masks = preset.test_masks
     num_heads = 4
     dropout = 0.0
     residual_blocks = 0
@@ -170,6 +262,21 @@ def train(
         hidden_dims = (32,)
         direct_input_to_output = True
         residual_blocks = 4
+    elif architecture is ArchitectureName.GATED_PIXELCNN:
+        hidden_dims = (GATED_PIXELCNN_MNIST_PRESET.hidden_dim,)
+        direct_input_to_output = GATED_PIXELCNN_MNIST_PRESET.direct_input_to_output
+        residual_blocks = GATED_PIXELCNN_MNIST_PRESET.residual_blocks
+        resolved_optimizer = GATED_PIXELCNN_MNIST_PRESET.optimizer
+        resolved_learning_rate = GATED_PIXELCNN_MNIST_PRESET.learning_rate
+    elif architecture is ArchitectureName.LMCONV_ENSEMBLE:
+        hidden_dims = (LMCONV_ENSEMBLE_MNIST_PRESET.hidden_dim,)
+        direct_input_to_output = LMCONV_ENSEMBLE_MNIST_PRESET.direct_input_to_output
+        residual_blocks = LMCONV_ENSEMBLE_MNIST_PRESET.residual_blocks
+        resolved_optimizer = LMCONV_ENSEMBLE_MNIST_PRESET.optimizer
+        resolved_learning_rate = LMCONV_ENSEMBLE_MNIST_PRESET.learning_rate
+        resolved_mask_mode = MaskMode.EVERY_BATCH
+        resolved_validation_masks = LMCONV_ENSEMBLE_ORDERS
+        resolved_test_masks = LMCONV_ENSEMBLE_ORDERS
     elif architecture is ArchitectureName.ATTENTION:
         hidden_dims = (ATTENTION_MNIST_PRESET.hidden_dim,)
         direct_input_to_output = ATTENTION_MNIST_PRESET.direct_input_to_output
@@ -197,9 +304,9 @@ def train(
             activation=preset.activation,
             direct_input_to_output=direct_input_to_output,
             mask_seed=resolved_seed,
-            mask_mode=preset.mask_mode,
-            validation_masks=preset.validation_masks,
-            test_masks=preset.test_masks,
+            mask_mode=resolved_mask_mode,
+            validation_masks=resolved_validation_masks,
+            test_masks=resolved_test_masks,
             optimizer=resolved_optimizer,
             learning_rate=resolved_learning_rate,
             decay=preset.decay,
@@ -217,7 +324,11 @@ def train(
                 seed=resolved_seed,
             )
 
-    run_name = dataset.value if architecture is ArchitectureName.PAPER else f"{dataset.value}_{architecture.value}"
+    run_name = (
+        dataset.value
+        if architecture is ArchitectureName.PAPER
+        else f"{dataset.value}_{architecture.value}"
+    )
     run_dir = output_dir / run_name
     checkpoint = ModelCheckpoint(
         dirpath=run_dir / "checkpoints",
@@ -235,6 +346,10 @@ def train(
         min_delta=0.0,
         check_on_train_epoch_end=False,
     )
+    export_dir = _resolve_checkpoint_export_dir(export_checkpoint_dir)
+    trainer_callbacks: list = [checkpoint, early_stopping]
+    if export_dir is not None:
+        trainer_callbacks.append(_ExportBestCheckpoint(export_dir))
     previous_training_time = 0.0
     existing_manifest = run_dir / "run_config.json"
     if resume_from is not None and existing_manifest.exists():
@@ -258,14 +373,15 @@ def train(
             "learning_rate": resolved_learning_rate,
             "decay": preset.decay,
             "epsilon": preset.epsilon,
-            "mask_mode": preset.mask_mode.value,
-            "validation_masks": preset.validation_masks,
-            "test_masks": preset.test_masks,
+            "mask_mode": resolved_mask_mode.value,
+            "validation_masks": resolved_validation_masks,
+            "test_masks": resolved_test_masks,
             "direct_input_to_output": direct_input_to_output,
             "num_heads": num_heads,
             "dropout": dropout,
             "paper_test_nll": preset.paper_test_nll,
             "paper_test_nll_ci95": preset.paper_test_nll_ci95,
+            "export_checkpoint_dir": None if export_dir is None else str(export_dir),
     }
     _manifest(
         run_dir / "run_config.json",
@@ -278,7 +394,7 @@ def train(
         "max_epochs": max_epochs,
         "deterministic": True,
         "default_root_dir": run_dir,
-        "callbacks": [checkpoint, early_stopping],
+        "callbacks": trainer_callbacks,
         "fast_dev_run": fast_dev_run,
     }
     if architecture is ArchitectureName.ATTENTION:
@@ -293,6 +409,11 @@ def train(
     manifest_values["training_time_seconds"] = previous_training_time + perf_counter() - started
     manifest_values["epochs_completed"] = trainer.current_epoch
     _manifest(run_dir / "run_config.json", manifest_values)
+    if export_dir is not None:
+        try:
+            shutil.copy2(run_dir / "run_config.json", export_dir / "run_config.json")
+        except OSError as error:
+            print(f"run_config export failed: {error}")
 
 
 @app.command
@@ -313,7 +434,6 @@ def evaluate(
     preset = paper_preset(dataset)
     resolved_batch_size = _resolved(batch_size, preset.batch_size)
     resolved_seed = _resolved(seed, preset.seed)
-    resolved_masks = _resolved(masks, preset.test_masks)
     L.seed_everything(resolved_seed, workers=True)
     data = MADEDataModule(
         dataset=dataset,
@@ -322,7 +442,13 @@ def evaluate(
         num_workers=num_workers,
         seed=resolved_seed,
     )
-    model = MADELitModule.load_from_checkpoint(checkpoint, test_masks=resolved_masks)
+    # Without an explicit override, honor the checkpoint's own test-mask
+    # count so ensemble architectures are not silently evaluated single-order.
+    if masks is None:
+        model = MADELitModule.load_from_checkpoint(checkpoint)
+    else:
+        model = MADELitModule.load_from_checkpoint(checkpoint, test_masks=masks)
+    resolved_masks = int(model.hparams.test_masks)
     if model.hparams.input_dim != data.spec.input_dim:
         raise ValueError("checkpoint input dimension does not match the selected dataset")
     trainer = L.Trainer(
