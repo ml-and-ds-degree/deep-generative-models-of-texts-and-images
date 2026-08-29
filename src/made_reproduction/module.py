@@ -18,7 +18,9 @@ from made_reproduction.config import (
 from made_reproduction.networks import (
     MADE,
     AttentionMADE,
+    GatedPixelCNN,
     LocallyMaskedConvMADE,
+    OrderEnsembleLMConvMADE,
     PixelCNNMADE,
     ResidualMADE,
 )
@@ -125,6 +127,23 @@ class MADELitModule(L.LightningModule):
                 channels=hidden_dims[0],
                 residual_blocks=residual_blocks,
                 direct_input_to_output=direct_input_to_output,
+            )
+        elif self.architecture is ArchitectureName.GATED_PIXELCNN:
+            if len(hidden_dims) != 1:
+                raise ValueError("Gated PixelCNN uses one channel width")
+            self.model = GatedPixelCNN(
+                input_dim=input_dim,
+                channels=hidden_dims[0],
+                residual_blocks=residual_blocks,
+            )
+        elif self.architecture is ArchitectureName.LMCONV_ENSEMBLE:
+            if len(hidden_dims) != 1:
+                raise ValueError("LMConv ensemble uses one channel width")
+            self.model = OrderEnsembleLMConvMADE(
+                input_dim=input_dim,
+                channels=hidden_dims[0],
+                residual_blocks=residual_blocks,
+                mask_seed=mask_seed,
             )
         elif self.architecture is ArchitectureName.ATTENTION:
             if len(hidden_dims) != 1:

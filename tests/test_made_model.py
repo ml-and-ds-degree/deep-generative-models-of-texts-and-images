@@ -6,15 +6,18 @@ import lightning as L
 import torch
 from torch.utils.data import DataLoader
 
+from made_reproduction.metrics import unbiased_rbf_mmd
 from made_reproduction.module import MADELitModule
 from made_reproduction.networks import (
-    AttentionMADE,
-    LocallyMaskedConvMADE,
     MADE,
+    AttentionMADE,
+    GatedPixelCNN,
+    LocallyMaskedConvMADE,
+    OrderEnsembleLMConvMADE,
     PixelCNNMADE,
     ResidualMADE,
+    s_curve_order_degrees,
 )
-from made_reproduction.metrics import unbiased_rbf_mmd
 
 
 class MADEArchitectureTests(unittest.TestCase):
@@ -108,6 +111,68 @@ class MADEArchitectureTests(unittest.TestCase):
                 gradient[output_index:], torch.zeros_like(gradient[output_index:])
             )
 
+    def test_gated_pixelcnn_preserves_raster_order_dependencies(self) -> None:
+        model = GatedPixelCNN(16, channels=4, residual_blocks=2)
+        # The output head is zero-initialized for training stability, which
+        # would make this test vacuous; randomize it so gradients flow.
+        for layer in model.output_head:
+            if isinstance(layer, torch.nn.Conv2d):
+                torch.nn.init.normal_(layer.weight)
+                torch.nn.init.normal_(layer.bias)
+        inputs = torch.randn(1, 16, requires_grad=True)
+        logits = model(inputs)
+        for output_index in range(16):
+            gradient = torch.autograd.grad(
+                logits[0, output_index], inputs, retain_graph=True
+            )[0][0]
+            torch.testing.assert_close(
+                gradient[output_index:], torch.zeros_like(gradient[output_index:])
+            )
+
+    def test_gated_pixelcnn_uses_past_pixels(self) -> None:
+        model = GatedPixelCNN(16, channels=4, residual_blocks=2)
+        for layer in model.output_head:
+            if isinstance(layer, torch.nn.Conv2d):
+                torch.nn.init.normal_(layer.weight)
+                torch.nn.init.normal_(layer.bias)
+        inputs = torch.randn(1, 16, requires_grad=True)
+        gradient = torch.autograd.grad(model(inputs)[0, 15], inputs)[0][0]
+        self.assertGreater(gradient[:15].abs().sum().item(), 0.0)
+
+    def test_s_curve_orders_are_distinct_permutations(self) -> None:
+        orders = [s_curve_order_degrees(4, index) for index in range(8)]
+        for degrees in orders:
+            self.assertEqual(sorted(degrees.tolist()), list(range(1, 17)))
+        as_tuples = {tuple(degrees.tolist()) for degrees in orders}
+        self.assertEqual(len(as_tuples), 8)
+
+    def test_lmconv_ensemble_preserves_dependencies_in_every_order(self) -> None:
+        model = OrderEnsembleLMConvMADE(16, channels=4, residual_blocks=2)
+        for layer in model.output_head:
+            if isinstance(layer, torch.nn.Conv2d):
+                torch.nn.init.normal_(layer.weight)
+                torch.nn.init.normal_(layer.bias)
+        for order_index in range(8):
+            model.set_masks(order_index)
+            inputs = torch.randn(1, 16, requires_grad=True)
+            logits = model(inputs)
+            for output_index in range(16):
+                gradient = torch.autograd.grad(
+                    logits[0, output_index], inputs, retain_graph=True
+                )[0][0]
+                forbidden = model.input_degrees >= model.input_degrees[output_index]
+                torch.testing.assert_close(
+                    gradient[forbidden], torch.zeros_like(gradient[forbidden])
+                )
+
+    def test_lmconv_ensemble_log_prob_averages_orders(self) -> None:
+        model = OrderEnsembleLMConvMADE(16, channels=4, residual_blocks=1)
+        inputs = torch.bernoulli(torch.full((3, 16), 0.5))
+        ensemble = model.ensemble_log_prob(inputs, 8, start_index=2_000_000)
+        self.assertEqual(ensemble.shape, (3,))
+        self.assertTrue(torch.isfinite(ensemble).all())
+        self.assertEqual(int(model.mask_index.item()), 0)
+
     def test_attention_made_preserves_autoregressive_dependencies(self) -> None:
         model = AttentionMADE(
             8, 16, 2, num_heads=4, dropout=0.0, mask_seed=41
@@ -171,6 +236,40 @@ class MADELightningTests(unittest.TestCase):
                 accelerator="cpu",
                 max_epochs=1,
                 limit_train_batches=1,
+                limit_val_batches=1,
+                logger=False,
+                enable_checkpointing=False,
+                enable_progress_bar=False,
+                enable_model_summary=False,
+                deterministic=True,
+            )
+            trainer.fit(model, train_dataloaders=batches, val_dataloaders=batches)
+
+    def test_improved_conv_architectures_complete_a_training_step(self) -> None:
+        L.seed_everything(11)
+        batches = DataLoader(torch.bernoulli(torch.full((6, 16), 0.5)), batch_size=3)
+        cases = (
+            ("gated-pixelcnn", "fixed", 1, 1),
+            ("lmconv-ensemble", "every-batch", 8, 8),
+        )
+        for architecture, mask_mode, validation_masks, test_masks in cases:
+            model = MADELitModule(
+                input_dim=16,
+                hidden_dims=(8,),
+                architecture=architecture,
+                residual_blocks=2,
+                direct_input_to_output=False,
+                mask_mode=mask_mode,
+                validation_masks=validation_masks,
+                test_masks=test_masks,
+                optimizer="adamw",
+                learning_rate=1e-3,
+                mask_seed=11,
+            )
+            trainer = L.Trainer(
+                accelerator="cpu",
+                max_epochs=1,
+                limit_train_batches=2,
                 limit_val_batches=1,
                 logger=False,
                 enable_checkpointing=False,

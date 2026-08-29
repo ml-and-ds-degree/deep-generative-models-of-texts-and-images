@@ -45,6 +45,8 @@ class ArchitectureName(StrEnum):
     DEEP = "deep"
     LMCONV = "lmconv"
     PIXELCNN = "pixelcnn"
+    GATED_PIXELCNN = "gated-pixelcnn"
+    LMCONV_ENSEMBLE = "lmconv-ensemble"
     RESIDUAL = "residual"
     ATTENTION = "attention"
 
@@ -243,6 +245,38 @@ ATTENTION_MNIST_PRESET = ImprovementPreset(
     optimizer=OptimizerName.ADAMW,
     learning_rate=1e-3,
 )
+
+
+# Gated PixelCNN (van den Oord et al., 2016): the vertical and horizontal
+# convolution stacks remove the stacked-masked-convolution blind spot, and
+# gated tanh-sigmoid units replace ReLU. Same data, Bernoulli likelihood,
+# batch size, seed, and checkpoint rule as the reconstruction; AdamW is the
+# optimizer this family is conventionally trained with.
+GATED_PIXELCNN_MNIST_PRESET = ImprovementPreset(
+    architecture=ArchitectureName.GATED_PIXELCNN,
+    hidden_dim=96,
+    residual_blocks=10,
+    direct_input_to_output=False,
+    optimizer=OptimizerName.ADAMW,
+    learning_rate=1e-3,
+)
+
+
+# Order-agnostic locally masked convolutional MADE (Jain et al., 2020):
+# keeps both MADE ideas (masked weights for exact one-pass likelihoods and
+# averaging over orderings) but realizes the masks spatially. Training
+# cycles eight dihedral S-curve orders (one per batch, exactly MADE's
+# mask-resampling protocol) and evaluation averages all eight orders.
+LMCONV_ENSEMBLE_MNIST_PRESET = ImprovementPreset(
+    architecture=ArchitectureName.LMCONV_ENSEMBLE,
+    hidden_dim=64,
+    residual_blocks=8,
+    direct_input_to_output=False,
+    optimizer=OptimizerName.ADAMW,
+    learning_rate=1e-3,
+)
+
+LMCONV_ENSEMBLE_ORDERS = 8
 
 
 def paper_preset(dataset: DatasetName | str) -> PaperPreset:

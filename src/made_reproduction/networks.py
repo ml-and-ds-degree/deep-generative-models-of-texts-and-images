@@ -458,15 +458,29 @@ class AttentionMADE(nn.Module):
 
     @torch.no_grad()
     def sample(
-        self, count: int, *, generator: torch.Generator | None = None
+        self,
+        count: int,
+        *,
+        generator: torch.Generator | None = None,
+        chunk_size: int = 16,
     ) -> Tensor:
         if count < 1:
             raise ValueError("count must be positive")
-        samples = torch.zeros(count, self.input_dim, device=self.input_degrees.device)
-        for variable in self.generation_order:
-            probabilities = torch.sigmoid(self(samples)[:, variable])
-            samples[:, variable] = torch.bernoulli(probabilities, generator=generator)
-        return samples
+        if chunk_size < 1:
+            raise ValueError("chunk_size must be positive")
+        chunks = []
+        for start in range(0, count, chunk_size):
+            width = min(chunk_size, count - start)
+            samples = torch.zeros(
+                width, self.input_dim, device=self.input_degrees.device
+            )
+            for variable in self.generation_order:
+                probabilities = torch.sigmoid(self(samples)[:, variable])
+                samples[:, variable] = torch.bernoulli(
+                    probabilities, generator=generator
+                )
+            chunks.append(samples)
+        return torch.cat(chunks, dim=0)
 
 
 class LocallyMaskedConv2d(nn.Module):
@@ -499,7 +513,11 @@ class LocallyMaskedConv2d(nn.Module):
         ).squeeze(0).bool()
         targets = degrees.reshape(1, -1)
         allowed = patches < targets if strict else patches <= targets
-        self.mask = (allowed & valid).to(dtype=self.weight.dtype)
+        # Follow the weight's device: order-agnostic training re-sets masks
+        # after the module has already been moved to MPS or CUDA.
+        self.mask = (allowed & valid).to(
+            dtype=self.weight.dtype, device=self.weight.device
+        )
 
     def forward(self, inputs: Tensor) -> Tensor:
         patches = F.unfold(
@@ -594,6 +612,310 @@ class LocallyMaskedConvMADE(nn.Module):
             raise ValueError("LMConv candidate currently uses one fixed ordering")
         del start_index
         return self.log_prob(inputs)
+
+    @torch.no_grad()
+    def sample(
+        self, count: int, *, generator: torch.Generator | None = None
+    ) -> Tensor:
+        if count < 1:
+            raise ValueError("count must be positive")
+        samples = torch.zeros(count, self.input_dim, device=self.input_degrees.device)
+        for variable in torch.argsort(self.input_degrees):
+            probabilities = torch.sigmoid(self(samples)[:, variable])
+            samples[:, variable] = torch.bernoulli(probabilities, generator=generator)
+        return samples
+
+
+def s_curve_order_degrees(side: int, index: int) -> Tensor:
+    """Return degrees ``1..side**2`` (row-major flattened) for one S-curve order.
+
+    The base order is the boustrophedon scan (left-to-right on even rows,
+    right-to-left on odd rows). ``index % 8`` selects one of the eight
+    dihedral transforms of that curve, giving eight distinct generation
+    orders that all traverse the image along locally contiguous paths.
+    """
+
+    positions = torch.arange(side * side).reshape(side, side)
+    positions[1::2] = positions[1::2].flip(-1)
+    if index % 8 & 1:
+        positions = positions.flip(0)
+    if index % 8 & 2:
+        positions = positions.flip(1)
+    if index % 8 & 4:
+        positions = positions.transpose(0, 1)
+    return (positions + 1).reshape(-1)
+
+
+def _gated_activation(values: Tensor) -> Tensor:
+    """The Gated PixelCNN unit: split channels, then tanh times sigmoid."""
+
+    content, gate = values.chunk(2, dim=1)
+    return torch.tanh(content) * torch.sigmoid(gate)
+
+
+class VerticalStackConv2d(nn.Module):
+    """Convolution whose output at row r sees input rows strictly above r."""
+
+    def __init__(self, in_channels: int, out_channels: int, kernel_size: int):
+        super().__init__()
+        if kernel_size % 2 != 1:
+            raise ValueError("kernel_size must be odd")
+        half = kernel_size // 2
+        self.conv = nn.Conv2d(in_channels, out_channels, (half + 1, kernel_size))
+        # (left, right, top, bottom): padding the top by half+1 rows and
+        # cropping the bottom shifts the window fully above the output row.
+        self.padding = (half, half, half + 1, 0)
+
+    def forward(self, inputs: Tensor) -> Tensor:
+        outputs = self.conv(F.pad(inputs, self.padding))
+        return outputs[:, :, : inputs.shape[2], :]
+
+
+class HorizontalStackConv2d(nn.Module):
+    """1-by-k convolution over pixels left of (type A) or up to (type B) each column."""
+
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int,
+        *,
+        include_center: bool,
+    ):
+        super().__init__()
+        if kernel_size % 2 != 1:
+            raise ValueError("kernel_size must be odd")
+        width = kernel_size // 2 + 1
+        self.conv = nn.Conv2d(in_channels, out_channels, (1, width))
+        self.padding = (width - int(include_center), 0, 0, 0)
+        self.include_center = include_center
+
+    def forward(self, inputs: Tensor) -> Tensor:
+        outputs = self.conv(F.pad(inputs, self.padding))
+        return outputs[:, :, :, : inputs.shape[3]]
+
+
+class GatedPixelCNNLayer(nn.Module):
+    """One vertical-plus-horizontal gated layer from van den Oord et al. (2016)."""
+
+    def __init__(
+        self,
+        in_channels: int,
+        channels: int,
+        kernel_size: int,
+        *,
+        include_center: bool,
+        residual: bool,
+    ):
+        super().__init__()
+        self.vertical = VerticalStackConv2d(in_channels, 2 * channels, kernel_size)
+        self.vertical_to_horizontal = nn.Conv2d(2 * channels, 2 * channels, 1)
+        self.horizontal = HorizontalStackConv2d(
+            in_channels, 2 * channels, kernel_size, include_center=include_center
+        )
+        self.horizontal_residual = nn.Conv2d(channels, channels, 1) if residual else None
+
+    def forward(self, vertical: Tensor, horizontal: Tensor) -> tuple[Tensor, Tensor]:
+        vertical_pre = self.vertical(vertical)
+        horizontal_pre = self.horizontal(horizontal) + self.vertical_to_horizontal(
+            vertical_pre
+        )
+        horizontal_out = _gated_activation(horizontal_pre)
+        if self.horizontal_residual is not None:
+            horizontal_out = horizontal + self.horizontal_residual(horizontal_out)
+        return _gated_activation(vertical_pre), horizontal_out
+
+
+class GatedPixelCNN(nn.Module):
+    """Gated PixelCNN without the masked-convolution blind spot.
+
+    The vertical stack conditions on all rows above the current pixel and the
+    horizontal stack on earlier pixels of the current row, so unlike stacked
+    single-mask convolutions the receptive field grows without a blind spot.
+    Gated tanh-sigmoid units replace ReLU, and the horizontal stack carries
+    residual connections. Raster order, exact Bernoulli likelihood.
+    """
+
+    def __init__(
+        self,
+        input_dim: int,
+        *,
+        channels: int = 96,
+        residual_blocks: int = 10,
+        input_kernel_size: int = 7,
+        kernel_size: int = 5,
+    ):
+        super().__init__()
+        side = math.isqrt(input_dim)
+        if side * side != input_dim:
+            raise ValueError("Gated PixelCNN requires a square image")
+        if channels < 1 or residual_blocks < 1:
+            raise ValueError("channels and residual_blocks must be positive")
+        self.input_dim = input_dim
+        self.side = side
+        self.input_layer = GatedPixelCNNLayer(
+            1, channels, input_kernel_size, include_center=False, residual=False
+        )
+        self.layers = nn.ModuleList(
+            GatedPixelCNNLayer(
+                channels, channels, kernel_size, include_center=True, residual=True
+            )
+            for _ in range(residual_blocks)
+        )
+        self.output_head = nn.Sequential(
+            nn.ReLU(),
+            nn.Conv2d(channels, channels, 1),
+            nn.ReLU(),
+            nn.Conv2d(channels, 1, 1),
+        )
+        self.register_buffer("input_degrees", torch.arange(1, input_dim + 1))
+        self.register_buffer("mask_index", torch.tensor(0, dtype=torch.long))
+        nn.init.zeros_(self.output_head[-1].weight)
+        nn.init.zeros_(self.output_head[-1].bias)
+
+    def set_masks(self, index: int) -> None:
+        if index != 0:
+            raise ValueError("Gated PixelCNN uses one fixed raster ordering")
+
+    def resample_masks(self) -> None:
+        raise ValueError("Gated PixelCNN uses one fixed raster ordering")
+
+    def forward(self, inputs: Tensor) -> Tensor:
+        image = inputs.reshape(-1, 1, self.side, self.side)
+        vertical, horizontal = self.input_layer(image, image)
+        for layer in self.layers:
+            vertical, horizontal = layer(vertical, horizontal)
+        return self.output_head(horizontal).flatten(1)
+
+    def log_prob(self, inputs: Tensor) -> Tensor:
+        return -F.binary_cross_entropy_with_logits(
+            self(inputs), inputs, reduction="none"
+        ).sum(dim=-1)
+
+    def ensemble_log_prob(self, inputs: Tensor, masks: int, *, start_index: int) -> Tensor:
+        if masks != 1:
+            raise ValueError("Gated PixelCNN uses one fixed raster ordering")
+        del start_index
+        return self.log_prob(inputs)
+
+    @torch.no_grad()
+    def sample(
+        self, count: int, *, generator: torch.Generator | None = None
+    ) -> Tensor:
+        if count < 1:
+            raise ValueError("count must be positive")
+        samples = torch.zeros(count, self.input_dim, device=self.input_degrees.device)
+        for variable in range(self.input_dim):
+            probabilities = torch.sigmoid(self(samples)[:, variable])
+            samples[:, variable] = torch.bernoulli(probabilities, generator=generator)
+        return samples
+
+
+class GatedLocallyMaskedBlock(nn.Module):
+    """Residual gated block built on a per-location masked 3-by-3 convolution."""
+
+    def __init__(self, channels: int, kernel_size: int = 3):
+        super().__init__()
+        self.conv = LocallyMaskedConv2d(channels, 2 * channels, kernel_size)
+        self.projection = nn.Conv2d(channels, channels, 1)
+
+    def forward(self, hidden: Tensor) -> Tensor:
+        return hidden + self.projection(_gated_activation(self.conv(hidden)))
+
+
+class OrderEnsembleLMConvMADE(nn.Module):
+    """Order-agnostic locally masked convolutional MADE (Jain et al., 2020).
+
+    MADE's two ideas are kept: weight masking gives exact one-pass
+    autoregressive likelihoods, and averaging over orderings improves the
+    density estimate. The masks are realized spatially with per-location
+    masked convolutions, so unlike a shared raster weight mask there is no
+    blind spot, and unlike dense MADE the parameters respect image geometry.
+    ``set_masks(index)`` selects one of eight dihedral S-curve orders;
+    training cycles them per batch and evaluation averages all eight.
+    """
+
+    ORDER_COUNT = 8
+
+    def __init__(
+        self,
+        input_dim: int,
+        *,
+        channels: int = 64,
+        residual_blocks: int = 8,
+        input_kernel_size: int = 7,
+        kernel_size: int = 3,
+        mask_seed: int = 1234,
+    ):
+        super().__init__()
+        side = math.isqrt(input_dim)
+        if side * side != input_dim:
+            raise ValueError("LMConv MADE requires a square image")
+        if channels < 1 or residual_blocks < 1:
+            raise ValueError("channels and residual_blocks must be positive")
+        self.input_dim = input_dim
+        self.side = side
+        self.mask_seed = mask_seed
+        self.input_layer = LocallyMaskedConv2d(1, 2 * channels, input_kernel_size)
+        self.blocks = nn.ModuleList(
+            GatedLocallyMaskedBlock(channels, kernel_size)
+            for _ in range(residual_blocks)
+        )
+        self.output_head = nn.Sequential(
+            nn.ReLU(),
+            nn.Conv2d(channels, channels, 1),
+            nn.ReLU(),
+            nn.Conv2d(channels, 1, 1),
+        )
+        self.register_buffer("input_degrees", torch.arange(1, input_dim + 1))
+        self.register_buffer("mask_index", torch.tensor(0, dtype=torch.long))
+        nn.init.zeros_(self.output_head[-1].weight)
+        nn.init.zeros_(self.output_head[-1].bias)
+        self.set_masks(0)
+
+    @torch.no_grad()
+    def set_masks(self, index: int) -> None:
+        if index < 0:
+            raise ValueError("mask index must be non-negative")
+        degrees = s_curve_order_degrees(self.side, index)
+        # The input layer is strict (excludes the current pixel); hidden
+        # features at a location then depend only on strictly earlier pixels,
+        # so hidden layers may include the current location without leaking.
+        self.input_layer.set_mask(degrees, strict=True)
+        for block in self.blocks:
+            block.conv.set_mask(degrees, strict=False)
+        self.input_degrees.copy_(degrees.to(self.input_degrees.device))
+        self.mask_index.fill_(index)
+
+    @torch.no_grad()
+    def resample_masks(self) -> None:
+        self.set_masks(int(self.mask_index.item()) + 1)
+
+    def forward(self, inputs: Tensor) -> Tensor:
+        image = inputs.reshape(-1, 1, self.side, self.side)
+        hidden = _gated_activation(self.input_layer(image))
+        for block in self.blocks:
+            hidden = block(hidden)
+        return self.output_head(hidden).flatten(1)
+
+    def log_prob(self, inputs: Tensor) -> Tensor:
+        return -F.binary_cross_entropy_with_logits(
+            self(inputs), inputs, reduction="none"
+        ).sum(dim=-1)
+
+    def ensemble_log_prob(self, inputs: Tensor, masks: int, *, start_index: int) -> Tensor:
+        if masks < 1 or start_index < 0:
+            raise ValueError("masks must be positive and start_index non-negative")
+        original_index = int(self.mask_index.item())
+        log_probabilities = []
+        try:
+            for index in range(start_index, start_index + min(masks, self.ORDER_COUNT)):
+                self.set_masks(index)
+                log_probabilities.append(self.log_prob(inputs))
+        finally:
+            self.set_masks(original_index)
+        stacked = torch.stack(log_probabilities, dim=0)
+        return torch.logsumexp(stacked, dim=0) - math.log(stacked.shape[0])
 
     @torch.no_grad()
     def sample(
