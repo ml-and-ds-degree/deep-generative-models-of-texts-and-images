@@ -40,11 +40,12 @@ We reconstruct the one-hidden-layer, one-mask binarized-MNIST experiment from
 Masked Autoencoder for Distribution Estimation (MADE) \citep{germain2015made},
 then replace its dense hidden transformation with a compact residual masked
 convolutional architecture. The reconstruction reaches 88.769 test nats,
-inside the paper's reported $88.40\pm0.45$ interval. The improved model reaches
-87.399 nats with 653,281 parameters, reducing test NLL by 1.370 nats while using
-94.8\% fewer parameters. Under a matched unbiased-MMD protocol, sample quality
-does not improve, illustrating that likelihood and finite-sample similarity need
-not move together.
+inside the selected condition's reported $88.40\pm0.45$ interval. The improved
+model reaches 87.399 nats with 653,281 parameters, reducing test NLL by 1.370
+nats while using 94.8\% fewer parameters. This comparison targets the
+compute-feasible single-layer condition rather than the paper's best, larger
+model. Under a matched unbiased-MMD protocol, sample quality does not improve,
+illustrating that likelihood and finite-sample similarity need not move together.
 \end{abstract}
 
 \part{Paper Reconstruction}
@@ -59,7 +60,12 @@ p(x)=\prod_{d=1}^{D}p(x_d\mid x_{<d}).
 \end{equation}
 All $D$ conditionals are evaluated in one forward pass, while generation is
 sequential. We select statically binarized $28\times28$ MNIST, one fixed mask,
-and the paper target of $88.40\pm0.45$ test nats.
+and the paper target of $88.40\pm0.45$ test nats. The paper's strongest MADE
+result is $86.64\pm0.44$ nats using two 8,000-unit hidden layers and 32 masks.
+We deliberately select the single-layer, single-mask condition because the
+larger model's memory, training, and multi-mask evaluation costs exceed our
+available local compute. Accordingly, all reconstruction claims below refer to
+this selected paper condition, not to the paper's overall best result.
 
 \section{Architecture and masking}
 The reconstruction uses one 8,000-unit hidden layer with ReLU activation and
@@ -82,11 +88,12 @@ For a binary example, the exact negative log-likelihood is
 \label{eq:nll}
 \end{equation}
 NLL in nats is the paper metric; lower values mean greater held-out probability
-and shorter ideal code length. Table~\ref{tab:setup} records the matched controls.
+and shorter ideal code length. Table~\ref{tab:setup} records the controlled
+reconstruction set-up.
 
 \begin{table}[H]
 \centering
-\caption{Paper-faithful binarized-MNIST reconstruction set-up.}
+\caption{Controlled binarized-MNIST reconstruction set-up.}
 \label{tab:setup}
 \begin{tabularx}{\textwidth}{@{}>{\bfseries\raggedright\arraybackslash}p{0.29\textwidth}YY@{}}
 \toprule
@@ -97,13 +104,21 @@ Architecture & one 8,000-unit ReLU hidden layer & matched \\
 Connections & one fixed shuffled mask; no direct path & matched \\
 Initialization & orthogonal weight matrices & matched \\
 Objective & exact Bernoulli NLL & matched \\
-Optimizer & Adagrad, $\eta=0.01$, $\epsilon=10^{-6}$, batch 100 & matched \\
+Optimizer & Adagrad, $\eta=0.01$, $\epsilon=10^{-6}$, batch 100 & same values; implementation detail below \\
 Stopping & validation NLL, patience 30 & stopped after 77 epochs \\
 Randomness & fixed experimental seed & seed 1234 \\
 Implementation & original Theano code & PyTorch, Lightning, Cyclopts \\
 \bottomrule
 \end{tabularx}
 \end{table}
+
+One optimizer detail is not exact. The author implementation places the
+stabilizer inside the square root, dividing by
+$\sqrt{G_t+10^{-6}}$, whereas PyTorch Adagrad places it outside and divides by
+$\sqrt{G_t}+10^{-6}$ \citep{germain2015code,paszke2019pytorch}. We retain the
+PyTorch form used for these completed experiments. Both the reconstruction and
+improved model use that same form, so their controlled comparison is unchanged,
+but strict optimizer-level paper fidelity should not be inferred.
 
 \begin{figure}[H]
 \centering
@@ -184,12 +199,12 @@ weights and biases.
 \section{Three-way comparison}
 \begin{table}[H]
 \centering
-\caption{Paper, reconstruction, and improved-model results. Lower is better for
-NLL and MMD.}
+\caption{Selected paper condition, reconstruction, and improved-model results.
+Lower is better for NLL and MMD.}
 \label{tab:three-way}
 \begin{tabular}{@{}lrrr@{}}
 \toprule
-Metric & MADE paper & Reconstruction & Improved PixelCNN \\
+Metric & Selected paper condition & Reconstruction & Improved PixelCNN \\
 \midrule
 Test NLL (nats) & $88.40\pm0.45$ & 88.769 & \textbf{87.399} \\
 Unbiased MMD$^2$ & --- & \textbf{0.06497} & 0.06836 \\
@@ -210,8 +225,10 @@ kernel test. A direct masked path improved NLL only marginally;
 degree-preserving residual and dense-bottleneck MADE variants did not justify
 full adoption. The successful result came from matching the architecture to
 image geometry while preserving exact autoregressive likelihood evaluation.
-One seed establishes the controlled result but not cross-seed statistical
-significance.
+The improved model outperforms the selected compute-feasible condition, but its
+87.399 nats does not surpass the paper's larger two-layer, 32-mask result of
+$86.64\pm0.44$. One seed establishes the controlled result but not cross-seed
+statistical significance.
 
 \clearpage
 \begingroup
